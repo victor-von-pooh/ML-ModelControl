@@ -225,7 +225,7 @@ outputs:
     result = infer(spec)
     assert not result["ok"]
     assert result["nodes"]["att"]["status"] == "error"
-    assert result["nodes"]["fc"]["status"] == "skipped"
+    assert result["nodes"]["fc"]["status"] == "ok"
 
     # プーラーの無いモデルも, last_hidden_state の形を推定できる
     transformers = pytest.importorskip("transformers")
