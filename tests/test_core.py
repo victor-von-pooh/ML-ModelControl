@@ -826,3 +826,31 @@ outputs:
     assert result["outputs"]["y"]["shape"] == [2, 6]
     assert "z" not in result["outputs"]
     assert result["params"] == 54
+
+    # 文字でない出力の参照と口を書かない複数の出力は, 計算せずに出力のエラー
+    spec["outputs"] = {"y": "act", "bad": 5}
+    result = infer(spec)
+    assert result["outputs"]["bad"]["kind"] == "error"
+    assert result["outputs"]["y"]["shape"] == [2, 6]
+
+    # 確認は通るが作れない部品だけの誤りでも ok ではなく, 作れる部分の
+    # パラメータ数で上限を確かめる
+    spec = make_spec("""
+inputs:
+  x: {shape: [1, 4, 8, 8]}
+nodes:
+  conv:
+    unit: nn.Conv2d
+    params: {in_channels: 3, out_channels: 4, kernel_size: 1, groups: 2}
+    inputs: x
+  big: {unit: nn.Linear, params: {in_features: 8, out_features: 3000}, inputs: x}
+outputs:
+  y: big
+""")
+    result = infer(spec)
+    assert not result["ok"]
+    assert result["nodes"]["conv"]["status"] == "error"
+    assert list(result["nodes"]) == ["conv", "big"]
+    limited = infer(spec, max_params=1000)
+    assert limited["estimated_only"]
+    assert limited["params"] == 27000
