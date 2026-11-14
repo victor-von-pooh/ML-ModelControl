@@ -150,6 +150,111 @@ TORCH_NOTES = {
     }
 }
 
+# 手で書いた説明の無い torch.nn の層の短い説明 (部品の一覧に出す)
+TORCH_DESCRIPTIONS = {
+    "AlphaDropout": "SELU 向けのドロップアウト (平均と分散を保つ)",
+    "FeatureAlphaDropout": "チャンネルごとの AlphaDropout",
+    "Dropout1d": "チャンネルごとに 0 にするドロップアウト (1 次元)",
+    "Dropout2d": "チャンネルごとに 0 にするドロップアウト (2 次元)",
+    "Dropout3d": "チャンネルごとに 0 にするドロップアウト (3 次元)",
+    "BatchNorm3d": "バッチ正規化 (3 次元. 入力は (N, C, D, H, W))",
+    "SyncBatchNorm": "複数の GPU で統計をそろえるバッチ正規化",
+    "GroupNorm": "チャンネルをグループに分けて正規化する",
+    "InstanceNorm1d": "サンプルとチャンネルごとの正規化 (1 次元)",
+    "InstanceNorm2d": "サンプルとチャンネルごとの正規化 (2 次元)",
+    "InstanceNorm3d": "サンプルとチャンネルごとの正規化 (3 次元)",
+    "RMSNorm": "二乗平均平方根で割る正規化",
+    "LocalResponseNorm": "近くのチャンネルで割る局所応答正規化",
+    "CrossMapLRN2d": "チャンネル方向の局所応答正規化 (2 次元)",
+    "Bilinear": "2 つの入力の双線形変換 (x1^T A x2 + b)",
+    "Conv3d": "3 次元の畳み込み層",
+    "ConvTranspose1d": "1 次元の転置畳み込み層 (大きさを広げる)",
+    "ConvTranspose3d": "3 次元の転置畳み込み層 (大きさを広げる)",
+    "Fold": "区画の列を画像に戻す (Unfold の逆)",
+    "Unfold": "画像を区画に切り出して列にする",
+    "Unflatten": "dim の次元を unflattened_size の形に分ける",
+    "PixelShuffle": "チャンネルを空間に並べ替えて解像度を上げる",
+    "PixelUnshuffle": "空間をチャンネルに並べ替えて解像度を下げる",
+    "ChannelShuffle": "チャンネルをグループの間で入れ替える",
+    "Upsample": "補間で大きさを広げる (mode で補間の方法)",
+    "UpsamplingBilinear2d": "双線形補間で大きさを広げる (2 次元)",
+    "UpsamplingNearest2d": "最近傍で大きさを広げる (2 次元)",
+    "EmbeddingBag": "単語の埋め込みを袋ごとに合計か平均する",
+    "CosineSimilarity": "2 つの入力のコサイン類似度",
+    "PairwiseDistance": "2 つの入力の距離 (p ノルム)",
+    "GRUCell": "GRU の 1 時刻分",
+    "LSTMCell": "LSTM の 1 時刻分 (出力は h と c)",
+    "RNNCell": "単純な RNN の 1 時刻分",
+    "Transformer": "Transformer のエンコーダーとデコーダーの全体",
+    "TransformerDecoderLayer": "Transformer のデコーダーの 1 層",
+    "TransformerEncoder": "エンコーダーの層を重ねたもの",
+    "TransformerDecoder": "デコーダーの層を重ねたもの",
+    "CELU": "活性化関数 CELU",
+    "ELU": "活性化関数 ELU (負の側をなめらかに飽和)",
+    "SELU": "活性化関数 SELU (自己正規化)",
+    "GLU": "ゲート付き線形ユニット (半分をシグモイドのゲートにする)",
+    "Hardshrink": "絶対値が lambd 以下を 0 にする",
+    "Softshrink": "絶対値を lambd だけ縮め, 以下は 0 にする",
+    "Tanhshrink": "x - tanh(x)",
+    "Hardsigmoid": "活性化関数 Hardsigmoid (シグモイドの区分線形の近似)",
+    "Hardswish": "活性化関数 Hardswish",
+    "Hardtanh": "min_val と max_val の範囲に切る活性化関数",
+    "ReLU6": "活性化関数 ReLU6 (0 から 6 に切る)",
+    "PReLU": "負の側の傾きを学習する ReLU",
+    "RReLU": "負の側の傾きを学習のときに乱数で決める ReLU",
+    "Threshold": "threshold 以下を value に置き換える",
+    "Mish": "活性化関数 Mish",
+    "LogSigmoid": "シグモイドの対数",
+    "LogSoftmax": "dim の次元のソフトマックスの対数",
+    "Softmax2d": "各位置でチャンネル方向のソフトマックス",
+    "Softmin": "dim の次元のソフトミン (小さいほど大きい確率)",
+    "Softplus": "活性化関数 Softplus (ReLU のなめらかな近似)",
+    "Softsign": "x / (1 + |x|)",
+    "FractionalMaxPool2d": "割合で大きさを決める最大値プーリング (2 次元)",
+    "FractionalMaxPool3d": "割合で大きさを決める最大値プーリング (3 次元)",
+}
+
+# 次元の数だけが違う層の説明 (クラス名の頭, 説明)
+TORCH_FAMILY_DESCRIPTIONS = [
+    ("AdaptiveAvgPool", "出力の大きさを決める平均値プーリング"),
+    ("AdaptiveMaxPool", "出力の大きさを決める最大値プーリング"),
+    ("AvgPool", "平均値プーリング"),
+    ("MaxPool", "最大値プーリング"),
+    ("MaxUnpool", "最大値プーリングの位置に値を戻す (逆)"),
+    ("LPPool", "p 乗平均のプーリング"),
+    ("CircularPad", "周期的に (反対側の値で) 端を埋める"),
+    ("ConstantPad", "決めた値で端を埋める"),
+    ("ReflectionPad", "端で折り返した値で端を埋める"),
+    ("ReplicationPad", "端の値の繰り返しで端を埋める"),
+    ("ZeroPad", "0 で端を埋める")
+]
+
+
+def default_description(name: str) -> str:
+    """
+    手で書いた説明の無い torch.nn の層の説明を返す関数
+
+    Parameters
+    ----------
+    name: str
+        クラスの名前
+
+    Returns
+    ----------
+    description: str
+        説明 (無い場合は空). 次元の数だけが違う層は, 頭の説明に次元を付加
+    """
+    if name in TORCH_DESCRIPTIONS:
+        return TORCH_DESCRIPTIONS[name]
+    for head, text in TORCH_FAMILY_DESCRIPTIONS:
+        rest = name[len(head):]
+        if name.startswith(head) and rest in ("1d", "2d", "3d"):
+            return f"{text} ({rest[0]} 次元)"
+    description = ""
+
+    return description
+
+
 # 型ヒントでは選択肢が分からない, 文字の引数の選択肢 (クラス, 引数)
 PARAM_CHOICES = {
     ("Transformer", "activation"): ["relu", "gelu"],
@@ -175,10 +280,40 @@ OPS = [
      False),
     ("Transpose", ops.Transpose, "2 つの次元を入れ替える", False),
     ("Mean", ops.Mean, "dim の次元で平均を取る", False),
-    ("Select", ops.Select, "タプルの出力から index 番目を取り出す", False),
+    ("Select", ops.Select,
+     "index 番目を取り出す (タプルやリストは要素, テンソルは最初の次元)",
+     False),
     ("GetAttr", ops.GetAttr, "出力から name の属性かキーの値を取り出す",
      False)
 ]
+
+# 演算の引数の説明
+OP_PARAM_NOTES = {
+    "Add": {}, "Multiply": {},
+    "Concat": {"dim": {"description": "つなぐ次元 (負の数は後ろから)"}},
+    "Stack": {"dim": {"description": "新しく作る次元の位置"}},
+    "Reshape": {
+        "shape": {"description": "バッチの次元を除いた形 (例: [16, 4]. -1 は残り)"}
+    },
+    "Permute": {
+        "dims": {"description": "並べ替えた次元の順 (バッチも含む. 例: [0, 2, 1])"}
+    },
+    "Transpose": {
+        "dim0": {"description": "入れ替える 1 つ目の次元"},
+        "dim1": {"description": "入れ替える 2 つ目の次元"}
+    },
+    "Mean": {
+        "dim": {"description": "平均を取る次元"},
+        "keepdim": {"description": "平均を取った次元を大きさ 1 で残すか"}
+    },
+    "Select": {
+        "index": {"description": "取り出す番号 (負の数は後ろから. 例: LSTM の "
+                                 "h_n から最後の層は -1)"}
+    },
+    "GetAttr": {
+        "name": {"description": "取り出す属性かキーの名前 (例: last_hidden_state)"}
+    }
+}
 
 # 組み込みの部品を読み込んだかどうかの印
 LOADED = {"done": False}
@@ -329,6 +464,8 @@ def register_torch_unit(cls: type) -> UnitSpec:
         code_name=f"nn.{cls.__name__}", code_import="from torch import nn"
     )
     apply_notes(spec, TORCH_NOTES.get(cls.__name__, {}))
+    if not spec.description:
+        spec.description = default_description(cls.__name__)
     for param in spec.params:
         choices = PARAM_CHOICES.get((cls.__name__, param.name))
         if choices is not None:
@@ -380,6 +517,7 @@ def register_op(
         outputs=[PortSpec("out")], builder=make_builder(cls),
         code_name=f"ops.{name}", code_import="from ml_modelcontrol import ops"
     )
+    apply_notes(spec, {"params": OP_PARAM_NOTES.get(name, {})})
     register(spec)
 
     return spec

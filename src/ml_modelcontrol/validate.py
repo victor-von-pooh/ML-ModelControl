@@ -18,6 +18,9 @@ NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # ノードに使えない名前 (組み立てたモデルの部品の入れ物の属性と重なるもの)
 RESERVED_NAMES = set(dir(nn.ModuleDict()))
 
+# 書き出す Python のコードで使う名前 (ノードと入力に付けると書き出せない)
+EXPORT_NAMES = {"self", "torch", "nn", "ops", "result", "_pick"}
+
 # 入力の例に使える型と, 値の作り方
 DTYPES = {
     "float32", "float64", "float16", "bfloat16", "int64", "int32", "bool"
@@ -177,6 +180,13 @@ def check_name(
             "error", "reserved_name",
             f"ノードの名前 {name} は組み立てたモデルの属性と重なるので使えません",
             node=name
+        ))
+    elif name in EXPORT_NAMES:
+        issues.append(Issue(
+            "warning", "export_name",
+            f"{kind}の名前 {name} は書き出す Python のコードで使う名前と重なる"
+            "ので, コードを書き出せません (組み立てと形の推定はできる)",
+            node=str(name) if node else None, location=location
         ))
 
     return valid
