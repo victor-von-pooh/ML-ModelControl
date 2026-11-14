@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ml-modelcontrol"
+version = "0.1.0"
+description = "PyTorch のモデルの部品を登録簿として持ち, 部品をつないだ定義からモデルを組み立てるライブラリ"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml",
+    "torch>=2.2"
+]
+
+[project.optional-dependencies]
+geometric = [
+    "torch_geometric>=2.4"
+]
+huggingface = [
+    "transformers>=4.40"
+]
+dev = [
+    "pytest"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
