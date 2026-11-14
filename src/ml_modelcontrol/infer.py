@@ -6,6 +6,7 @@ import torch
 from torch import nn
 
 from ml_modelcontrol.model import GraphModel, NodeBuildError, follow_path
+from ml_modelcontrol.registry import get_unit
 from ml_modelcontrol.spec import load_spec
 from ml_modelcontrol.validate import Analysis, Issue, analyze
 
@@ -119,6 +120,28 @@ def count_params(
     return total, trainable
 
 
+def offline_values(unit_name: str) -> dict:
+    """
+    部品の, 学習済みの重みを読まない引数の値を返す関数
+
+    Parameters
+    ----------
+    unit_name: str
+        部品の名前
+
+    Returns
+    ----------
+    values: dict
+        引数の名前ごとの値, 登録されていない部品の場合は空
+    """
+    try:
+        values = dict(get_unit(unit_name).offline)
+    except KeyError:
+        values = {}
+
+    return values
+
+
 def estimate_params(spec: dict, analysis: Analysis) -> Optional[int]:
     """
     重みの値を作らずに (meta デバイスで), モデルのパラメータ数を数える関数
@@ -175,14 +198,15 @@ def infer(
         しなかったか)
     """
     # 定義の誤りがある場合と, 形の無い入力がある場合は計算なし
-    # Hugging Face のモデルは重みを読まずに設定だけから作成 (形は同じで,
-    # 大きな重みの取得と読み込みを避けるため)
+    # 学習済みの重みを読む部品は読まない値で作成 (形は同じで, 大きな重みの
+    # 取得と読み込みを避けるため)
     spec = load_spec(spec)
     for node in (spec.get("nodes") or {}).values():
-        if isinstance(node, dict) and str(node.get("unit", "")).startswith(
-            "hf."
-        ) and isinstance(node.get("params"), dict):
-            node["params"]["pretrained"] = False
+        if not isinstance(node, dict):
+            continue
+        offline = offline_values(str(node.get("unit", "")))
+        if offline and isinstance(node.get("params", {}) or {}, dict):
+            node["params"] = {**(node.get("params") or {}), **offline}
     analysis = analyze(spec)
     result: dict = {
         "ok": False, "issues": [vars(issue) for issue in analysis.issues],

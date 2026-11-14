@@ -22,6 +22,30 @@ geometric = [
 huggingface = [
     "transformers>=4.40"
 ]
+torchvision = [
+    "torchvision>=0.18"
+]
+timm = [
+    "timm>=1.0"
+]
+torchaudio = [
+    "torchaudio>=2.3"
+]
+einops = [
+    "einops>=0.8"
+]
+kornia = [
+    "kornia>=0.7"
+]
+monai = [
+    "monai>=1.3"
+]
+smp = [
+    "segmentation-models-pytorch>=0.3"
+]
+all = [
+    "ml-modelcontrol[geometric,huggingface,torchvision,timm,torchaudio,einops,kornia,monai,smp]"
+]
 dev = [
     "pytest"
 ]

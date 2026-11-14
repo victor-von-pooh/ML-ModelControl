@@ -16,7 +16,7 @@ cd ML-ModelControl
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"                          # 基本
-pip install -e ".[dev,geometric,huggingface]"    # PyTorch Geometric と Hugging Face の部品も使う場合
+pip install -e ".[dev,all]"    # 外部のライブラリの部品も全て使う場合 (ライブラリごとに [geometric], [timm] なども選べる)
 ```
 
 ## 使い方
@@ -48,7 +48,21 @@ logits = model(x)                        # 入力は定義の順の位置か, �
 units = describe_units()                 # 部品の一覧 (引数と口の説明付き)
 ```
 
-PyTorch Geometric の層 (`pyg.GCNConv` など) と Hugging Face のモデル (`hf.AutoModel`, `hf.AutoModelForSequenceClassification`) は, それぞれのライブラリを入れると使える (無い場合は一覧に「使えない」と理由が出る). Hugging Face のモデルは `params` の `model_name` に名前かローカルのパスを書き, `pretrained: false` で重みを読まずに設定だけから作れる. 外部のコード (`trust_remote_code`) は使わない.
+外部のライブラリの部品は, そのライブラリを入れると使える (無い場合は一覧に「使えない」と理由と入れ方が出る).
+
+| 任意の依存 | 部品 |
+| --- | --- |
+| `geometric` | PyTorch Geometric のグラフの層 (`pyg.GCNConv`, `pyg.MeanAggregation` など) |
+| `huggingface` | Hugging Face のモデル (`hf.AutoModel`, `hf.AutoModelForSequenceClassification`, `hf.AutoModelForImageClassification` など) |
+| `torchvision` | torchvision の層 (`tv.DeformConv2d`, `tv.SqueezeExcitation` など) と, 名前で作るモデル (`tv.Model`: `name: resnet18`) |
+| `timm` | timm の層 (`timm.Mlp`, `timm.Attention`, `timm.DropPath` など) と, 名前で作るモデル (`timm.Model`: `model_name: vit_base_patch16_224`) |
+| `torchaudio` | 音声の変換 (`audio.MelSpectrogram`, `audio.MFCC` など) とモデル (`audio.Conformer` など) |
+| `einops` | `einops.Rearrange`, `einops.Reduce`, `einops.EinMix` |
+| `kornia` | 画像の拡張, フィルタ, 色の変換 (`kornia.RandomHorizontalFlip`, `kornia.Normalize` など) |
+| `monai` | 医用画像のネットワークと部品 (`monai.UNet`, `monai.SwinUNETR` など) |
+| `smp` | 画像の領域分割のモデル (`smp.Unet`, `smp.FPN` など. segmentation_models_pytorch) |
+
+学習済みの重みを読む引数 (Hugging Face の `pretrained`, `tv.Model` の `weights`, `timm.Model` の `pretrained`, `smp` の `encoder_weights` など) は, 形の推定 (`infer`) では重みを読まない値に置き換える (組み立てでは書いた値のまま). Hugging Face のモデルは `params` の `model_name` に名前かローカルのパスを書く. 外部のコード (`trust_remote_code`) は使わない.
 
 同梱した例のモデルの定義 (全結合, 残差, CNN, LSTM, Transformer のエンコーダー, GCN, BERT の分類) は `list_examples()` で一覧にし, `load_example("cnn_classifier")` で読み込める. 自分のモデルを書き始めるときの元にできる.
 

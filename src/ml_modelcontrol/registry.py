@@ -1,7 +1,15 @@
 import inspect
 import math
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Literal, Optional, get_args, get_origin
+from typing import (
+    Any, Callable, Literal, Optional, Union, get_args, get_origin,
+    get_type_hints
+)
+
+try:
+    from types import UnionType
+except ImportError:
+    UnionType = None  # type: ignore[assignment,misc]
 
 from torch import nn
 
@@ -26,6 +34,9 @@ class ParamSpec:
     minimum: Optional[float] = None
     maximum: Optional[float] = None
     choices: Optional[list] = None
+
+    # 値の候補 (選択肢と違い, 候補以外も書ける. モデルの名前など)
+    suggestions: Optional[list] = None
 
 
 @dataclass
@@ -63,6 +74,9 @@ class UnitSpec:
     # 使えるかどうかと, 使えない場合の理由
     available: bool = True
     reason: str = ""
+
+    # 形の推定で置き換える引数の値 (学習済みの重みを読まない値)
+    offline: dict = field(default_factory=dict)
 
     # 引数の値から nn.Module を作る関数 (一覧の表示には含めない)
     builder: Optional[Callable[..., nn.Module]] = None
@@ -145,7 +159,9 @@ def describe_units() -> list[dict]:
     units = []
     for name in sorted(REGISTRY):
         data = asdict(REGISTRY[name])
-        for key in ("builder", "code_name", "code_import", "code_args"):
+        for key in (
+            "builder", "code_name", "code_import", "code_args", "offline"
+        ):
             data.pop(key)
         units.append(data)
 
@@ -286,23 +302,87 @@ def needs_module(cls: type) -> bool:
         必須の引数の型ヒントが nn.Module か Callable なら True
     """
     # 既定値の無い引数の型ヒントを確認
+    # 文字の型ヒント (from __future__ import annotations) は型に直す
     needed = False
-    for parameter in inspect.signature(cls.__init__).parameters.values():
+    try:
+        hints = get_type_hints(cls.__init__)
+    except Exception:
+        hints = {}
+    for name, parameter in inspect.signature(
+        cls.__init__
+    ).parameters.items():
         if parameter.default is not inspect.Parameter.empty:
             continue
-        annotation = parameter.annotation
+        annotation = hints.get(name, parameter.annotation)
         if isinstance(annotation, str):
             annotation = getattr(nn, annotation, annotation)
-        text = str(annotation)
-        if (
-            inspect.isclass(annotation) and issubclass(annotation, nn.Module)
-        ) or any(
-            word in text
-            for word in ("Module", "Callable", "MessagePassing", "Tensor")
-        ):
+        if needs_object(annotation):
             needed = True
 
     return needed
+
+
+def needs_object(annotation: Any) -> bool:
+    """
+    型ヒントが, 定義の値 (JSON) では渡せない部品かテンソルだけかを返す関数
+
+    Parameters
+    ----------
+    annotation: Any
+        型ヒント
+
+    Returns
+    ----------
+    needed: bool
+        nn.Module, 関数, テンソルだけを受け取る型ヒントなら True.
+        テンソルか数の組 (Tensor | tuple[float, float] など) のように,
+        値でも渡せる型ヒントは False
+    """
+    # 値でも渡せる選択肢を含む Union は対象外
+    words = ("Module", "Callable", "MessagePassing", "Tensor")
+    options = [
+        option for option in get_args(annotation)
+        if option is not type(None)
+    ] if is_union(annotation) else []
+    if options:
+        needed = all(needs_object(option) for option in options)
+        return needed
+
+    # 型に直せなかった文字の型ヒントは, 値の型を含めば渡せるものとする
+    text = str(annotation)
+    values = ("int", "float", "tuple", "list", "str", "bool")
+    if isinstance(annotation, str) and "Tensor" in text and not any(
+        word in text for word in ("Module", "Callable")
+    ):
+        needed = not any(word in text for word in values)
+        return needed
+    needed = (
+        inspect.isclass(annotation) and issubclass(annotation, nn.Module)
+    ) or any(word in text for word in words)
+
+    return needed
+
+
+def is_union(annotation: Any) -> bool:
+    """
+    型ヒントが Union (Optional と X | Y を含む) かを返す関数
+
+    Parameters
+    ----------
+    annotation: Any
+        型ヒント
+
+    Returns
+    ----------
+    union: bool
+        Union なら True
+    """
+    origin = get_origin(annotation)
+    union = origin is Union or (
+        UnionType is not None and origin is UnionType
+    )
+
+    return union
 
 
 def params_from_init(cls: type) -> tuple[list[ParamSpec], bool]:

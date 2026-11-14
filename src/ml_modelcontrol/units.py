@@ -4,6 +4,7 @@ from typing import Callable, Optional
 from torch import nn
 
 from ml_modelcontrol import ops
+from ml_modelcontrol.libraries import load_library_units
 from ml_modelcontrol.external import (
     load_geometric_units, load_huggingface_units
 )
@@ -195,6 +196,7 @@ def load_builtin_units() -> None:
         register_op(name, cls, description, variadic)
     load_geometric_units()
     load_huggingface_units()
+    load_library_units()
 
 
 def torch_unit_classes() -> list[type]:
