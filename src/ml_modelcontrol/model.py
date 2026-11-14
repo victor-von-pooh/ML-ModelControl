@@ -85,7 +85,16 @@ def follow_path(value: Any, path: list, lenient: bool = False) -> Any:
         if isinstance(step, int):
             item = item[step]
         elif isinstance(item, dict):
-            item = item.get(step) if lenient else item[step]
+            # 辞書に無いキーでも同じ名前の属性があれば属性 (Hugging Face の
+            # ModelOutput は値が None の項目をキーに持たない)
+            if step in item:
+                item = item[step]
+            elif hasattr(item, step):
+                item = getattr(item, step)
+            elif lenient:
+                item = None
+            else:
+                raise KeyError(f"戻り値の辞書にキー {step!r} がありません")
         else:
             item = getattr(item, step)
 
@@ -203,9 +212,16 @@ class GraphModel(nn.Module):
         if name in self.paths:
             paths = self.paths[name]
             port_name = port if port is not None else next(iter(paths))
-            value = follow_path(
-                value, paths[port_name], name in self.lenient
-            )
+            # 取り出せない場合は, どのノードのどの口かを添える
+            try:
+                value = follow_path(
+                    value, paths[port_name], name in self.lenient
+                )
+            except (KeyError, IndexError, AttributeError) as error:
+                raise ValueError(
+                    f"ノード {name} ({self.unit_names.get(name, '?')}) の口 "
+                    f"{port_name} を取り出せません: {error}"
+                ) from error
 
         return value
 
@@ -245,7 +261,7 @@ class GraphModel(nn.Module):
                 args.append(items[0] if items else None)
             elif items:
                 kwargs[port.name] = items[0]
-        # 部品の中の誤りには, どのノードで起きたかを添える
+        # 部品の中の誤りへの, 起きたノードの名前の付加
         try:
             output = self.nodes[name](*args, **kwargs)
         except Exception as error:

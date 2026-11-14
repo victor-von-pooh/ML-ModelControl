@@ -55,7 +55,9 @@ def load_spec(source: Union[str, Path, dict]) -> dict:
         spec = copy.deepcopy(source)
     else:
         # パスの代わりに YAML の文字を渡した場合の案内
-        if isinstance(source, str) and ("\n" in source or ": " in source):
+        if isinstance(source, str) and not Path(source).exists() and (
+            "\n" in source or ": " in source
+        ):
             raise ValueError(
                 "ファイルのパスではなく YAML の文字のようです. "
                 "yaml.safe_load で辞書にしてから渡してください"

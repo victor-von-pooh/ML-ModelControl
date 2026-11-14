@@ -544,6 +544,13 @@ def registered_names() -> list[str]:
     return names
 
 
+# 組み込みの部品の名前の頭 (自作の部品には使えない. 版が上がって同じ名前の
+# 部品が増えた場合に重ならないため)
+BUILTIN_PREFIXES = {
+    "nn", "op", "pyg", "hf", "tv", "timm", "audio", "einops", "kornia",
+    "monai", "smp"
+}
+
 # 自作の部品の名前 (識別子を . でつないだもの)
 UNIT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*")
 
@@ -658,6 +665,12 @@ def register_unit(
         raise ValueError(
             f"部品の名前 {unit_name!r} は, 英字か _ で始まる英数字と _ を . で"
             "つないだ名前にしてください (例: my.Block)"
+        )
+    if unit_name.split(".")[0] in BUILTIN_PREFIXES:
+        raise ValueError(
+            f"部品の名前 {unit_name} は組み込みの部品の頭 "
+            f"({unit_name.split('.')[0]}.) で始まるので使えません. 別の頭"
+            "にしてください (例: my.Block)"
         )
     existing = REGISTRY.get(unit_name)
     if existing is not None and existing.source != "custom":

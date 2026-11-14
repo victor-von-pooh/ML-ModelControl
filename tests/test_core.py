@@ -12,6 +12,7 @@ from ml_modelcontrol import (
     get_unit, infer, load_spec, register_unit, validate
 )
 from ml_modelcontrol.infer import count_params
+from ml_modelcontrol.registry import REGISTRY
 
 # 残差のつなぎ方と LSTM を持つモデルの定義
 RESIDUAL = """
@@ -954,7 +955,7 @@ def test_runtime_checks(tmp_path: Path) -> None:
     ----------
     None
     """
-    # 組み立てたモデルの部品の中の誤りに, ノードの名前を添える
+    # 組み立てたモデルの部品の中の誤りへの, ノードの名前の付加
     model = build_model(make_spec(), seed=0)
     with pytest.raises(RuntimeError) as caught:
         model(torch.randn(3, 5, 7))
@@ -976,6 +977,12 @@ outputs:
 """)
     node = infer(spec)["nodes"]["s"]
     assert node["status"] == "error" and "nokey" in node["error"]
+    with pytest.raises(ValueError, match="ノード s"):
+        build_model(spec)(torch.randn(2, 3, 4))
+
+    # 組み込みの部品の頭の名前は使えない
+    with pytest.raises(ValueError, match="組み込みの部品の頭"):
+        register_unit(Stats, name="nn.MyStats")
 
     # register_unit の名前と口の確認, docstring の説明
     with pytest.raises(ValueError, match="名前"):
@@ -984,6 +991,8 @@ outputs:
         register_unit(Stats, name="custom.Dup", outputs=["a", "a"])
     with pytest.raises(ValueError, match="識別子"):
         register_unit(Stats, name="custom.Hyphen", outputs=["out-1", "x"])
+
+    # 説明を省いた場合の, そのクラス自身の docstring の 1 行目
     unit = register_unit(SplitHalf, name="custom.Doc", overwrite=True)
     assert unit.description == ""
     class Documented(nn.Module):
@@ -1011,6 +1020,10 @@ outputs:
 
     unit = register_unit(Documented, name="custom.Doc2", overwrite=True)
     assert unit.description == "説明付きの自作の部品"
+
+    # 登録した部品の片付け (他のテストの部品の一覧に残さない)
+    for name in ("custom.StatsMissing", "custom.Doc", "custom.Doc2"):
+        REGISTRY.pop(name, None)
 
     # 読めない YAML と, パスの代わりの YAML の文字は ValueError
     broken = tmp_path / "broken.yaml"

@@ -5,7 +5,8 @@ import pytest
 import torch
 
 from ml_modelcontrol import (
-    build_model, describe_units, export_python, get_unit, infer, validate
+    build_model, describe_units, export_python, get_unit, infer,
+    register_unit, validate
 )
 from test_core import make_spec
 
@@ -262,3 +263,58 @@ outputs:
     ids = torch.zeros(2, 5, dtype=torch.long)
     assert exported(ids) is None
     assert build_model(spec)(ids) is None
+
+
+def test_custom_unit_model_output() -> None:
+    """
+    Hugging Face の ModelOutput を返す自作の部品で, 値が None の項目 (キーに
+    無い) を取り出すと None になることを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 値が None の pooler_output はキーに無いが, 属性として取り出す
+    transformers = pytest.importorskip("transformers")
+    output_cls = transformers.modeling_outputs.BaseModelOutputWithPooling
+
+    class Wrapped(torch.nn.Module):
+        def forward(self, x: torch.Tensor) -> object:
+            """
+            入力を隠れ状態として包む関数
+
+            Parameters
+            ----------
+            x: torch.Tensor
+                入力
+
+            Returns
+            ----------
+            output: object
+                プーラーの無い ModelOutput
+            """
+            output = output_cls(last_hidden_state=x, pooler_output=None)
+
+            return output
+
+    register_unit(
+        Wrapped, name="custom.Wrapped",
+        outputs={"h": ["last_hidden_state"], "p": ["pooler_output"]},
+        overwrite=True
+    )
+    spec = make_spec("""
+inputs:
+  x: {shape: [2, 3]}
+nodes:
+  w: {unit: custom.Wrapped, inputs: x}
+outputs:
+  h: "w:h"
+  p: "w:p"
+""")
+    result = build_model(spec)(torch.randn(2, 3))
+    assert result["p"] is None
+    assert result["h"].shape == (2, 3)
