@@ -1,0 +1,22 @@
+format_version: 1
+name: bert_classifier
+description: Hugging Face の BERT で文を読み, 文全体の表現 (pooler_output) で分類するモデル (transformers が必要. 形の推定ではモデルの設定を取得するのでネットワークを使う)
+inputs:
+  input_ids: {shape: [2, 16], dtype: int64, ui: {x: 0, y: 60}}
+  attention_mask: {shape: [2, 16], dtype: int64, fill: ones, ui: {x: 0, y: 200}}
+nodes:
+  bert:
+    unit: hf.AutoModel
+    params: {model_name: bert-base-uncased}
+    inputs: {input_ids: input_ids, attention_mask: attention_mask}
+    ui: {x: 260, y: 100}
+  head:
+    unit: nn.Linear
+    params: {in_features: 768, out_features: 2}
+    inputs: "bert:pooler_output"
+    ui: {x: 560, y: 100}
+outputs:
+  logits: head
+ui:
+  outputs:
+    logits: {x: 820, y: 120}

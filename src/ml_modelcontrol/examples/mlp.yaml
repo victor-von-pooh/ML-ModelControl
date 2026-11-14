@@ -1,0 +1,30 @@
+format_version: 1
+name: mlp
+description: 全結合の 2 層のモデル (表のデータの分類など)
+inputs:
+  x: {shape: [8, 16], ui: {x: 0, y: 100}}
+nodes:
+  fc1:
+    unit: nn.Linear
+    params: {in_features: 16, out_features: 32}
+    inputs: x
+    ui: {x: 220, y: 80}
+  act:
+    unit: nn.ReLU
+    inputs: fc1
+    ui: {x: 470, y: 80}
+  drop:
+    unit: nn.Dropout
+    params: {p: 0.1}
+    inputs: act
+    ui: {x: 720, y: 80}
+  head:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 3}
+    inputs: drop
+    ui: {x: 970, y: 80}
+outputs:
+  logits: head
+ui:
+  outputs:
+    logits: {x: 1220, y: 100}

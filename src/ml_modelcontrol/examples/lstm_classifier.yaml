@@ -1,0 +1,31 @@
+format_version: 1
+name: lstm_classifier
+description: 単語の番号の列を LSTM で読み, 最後の隠れ状態で分類するモデル
+inputs:
+  ids: {shape: [4, 12], dtype: int64, fill: arange, ui: {x: 0, y: 100}}
+nodes:
+  emb:
+    unit: nn.Embedding
+    params: {num_embeddings: 100, embedding_dim: 32}
+    inputs: ids
+    ui: {x: 220, y: 80}
+  lstm:
+    unit: nn.LSTM
+    params: {input_size: 32, hidden_size: 64, batch_first: true}
+    inputs: emb
+    ui: {x: 470, y: 80}
+  last:
+    unit: op.Select
+    params: {index: -1}
+    inputs: "lstm:h_n"
+    ui: {x: 720, y: 120}
+  head:
+    unit: nn.Linear
+    params: {in_features: 64, out_features: 2}
+    inputs: last
+    ui: {x: 970, y: 120}
+outputs:
+  logits: head
+ui:
+  outputs:
+    logits: {x: 1220, y: 140}
