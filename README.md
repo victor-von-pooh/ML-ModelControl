@@ -70,6 +70,55 @@ units = describe_units()                 # 部品の一覧 (引数と口の説�
 
 自作の部品は `register_unit(MyBlock, name="my.Block")` で登録すると, 定義の `unit` に書ける (`forward` が複数の値を返す場合は `outputs=["a", "b"]` で口の名前を付ける).
 
+## ML-Found で学習する
+
+組み立てたモデルは普通の `nn.Module` なので, [ML-Found](https://github.com/victor-von-pooh/ML-Found) の `Trainer` にそのまま渡せる. 定義のファイルの置き場をプロジェクトの config に書き, 学習スクリプトで組み立てる. 定義のファイルは実験の出力先に写しておくと, 後から同じモデルを作って `final_model.pt` を読み込める.
+
+```yaml
+# configs/default/train.yaml (プロジェクト固有の項目)
+model:
+  spec: models/iris_mlp.yaml    # プロジェクトのディレクトリからの相対パス
+```
+
+```python
+import shutil
+from pathlib import Path
+
+from ml_found import Trainer, load_project_config, start_experiment
+from ml_modelcontrol import build_model
+
+PROJECT_DIR = Path(__file__).resolve().parent
+
+cfg, diff = load_project_config(str(PROJECT_DIR))
+experiment = start_experiment(cfg, diff, str(PROJECT_DIR))
+
+# 定義から組み立て, 定義を実験の出力先に残す
+spec_path = PROJECT_DIR / cfg.model.spec
+model = build_model(spec_path, seed=cfg.experiment.seed)
+shutil.copy(spec_path, experiment.run_dir / "model_spec.yaml")
+
+# step とデータ (train_loader, valid_loader) は, ML-Found の README の
+# 「学習スクリプト」と同じくプロジェクトで用意する
+trainer = Trainer(model, experiment, step)
+history = trainer.fit(train_loader, valid_loader)
+```
+
+`experiment.run_dir` は実験の出力先 (`Path`. プロジェクトのディレクトリの `outputs/<experiment.name>/<日付>/<時刻>/`). 後から読み込む場合は, その中の定義と重みを使う.
+
+```python
+# 後から読み込む (パスはプロジェクトのディレクトリから)
+import torch
+
+run_dir = "outputs/iris/2026-11-15/01-14-54"
+model = build_model(f"{run_dir}/model_spec.yaml")
+model.load_state_dict(torch.load(f"{run_dir}/final_model.pt"))
+```
+
+- 出力が 1 つの定義のモデルはテンソルを返し, 複数の場合は出力の名前の辞書を返す. `step` では `logits = model(x)` か, 複数なら `logits = model(x)["logits"]` のように受け取る
+- 入力は定義の `inputs` の順の位置か, 名前のキーワードで渡す
+- ML-CreateArchitecture で保存した定義 (YAML) もそのまま使える
+- 学習済みの重みを読む部品 (`pretrained: true` など) は, `build_model` のときに重みを取得する (後から読み込むときも, 取得してから `final_model.pt` の重みで上書きする. ネットワークと時間が要る)
+
 ## 開発
 
 ```bash

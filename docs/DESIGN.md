@@ -139,4 +139,4 @@ outputs:
 | 1 | 登録簿 (`torch.nn` と演算, 自作の部品の登録), モデルの定義 (名前の規則, `ui`), 確認, 組み立て, 形の推定 |
 | 2 | PyTorch Geometric と Hugging Face の部品, Python のコードの書き出し |
 | 3 | ML-CreateArchitecture (GUI) から使う API の整備 |
-| 4 | ML-Found との連携 (定義をプロジェクトの config から読んで学習する) |
+| 4 | ML-Found との連携 (定義をプロジェクトの config から読んで学習する). 今は README の手順 (学習スクリプトで `build_model` を呼び, 定義を出力先に写す) で行い, ML-Found に専用の仕組み (定義の自動の保存や `run.json` への記録) を入れるかは, 使ってみてから決める |
