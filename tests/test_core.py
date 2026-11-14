@@ -543,3 +543,40 @@ def test_input_checks() -> None:
     assert not result["ok"]
     assert result["nodes"] == {}
     assert "input_too_large" in {issue["code"] for issue in result["issues"]}
+
+
+def test_param_choices() -> None:
+    """
+    型ヒントで選択肢が分からない文字の引数にも, 選択肢が付くことを確かめる
+    関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 選択肢の付いた引数と, 選択肢に無い値の誤り
+    layer = get_unit("nn.TransformerEncoderLayer")
+    activation = next(
+        param for param in layer.params if param.name == "activation"
+    )
+    assert (activation.kind, activation.choices) == ("str", ["relu", "gelu"])
+    spec = make_spec("""
+inputs:
+  x: {shape: [2, 5, 8]}
+nodes:
+  enc:
+    unit: nn.TransformerEncoderLayer
+    params: {d_model: 8, nhead: 2, batch_first: true, activation: swish}
+    inputs: x
+outputs:
+  y: enc
+""")
+    assert [
+        (issue["code"], issue["location"]) for issue in validate(spec)
+    ] == [("invalid_value", "params.activation")]
+    spec["nodes"]["enc"]["params"]["activation"] = "gelu"
+    assert infer(spec)["outputs"]["y"]["shape"] == [2, 5, 8]
