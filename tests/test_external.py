@@ -169,7 +169,8 @@ outputs:
     result = infer(spec)
     assert result["ok"], result
     assert result["outputs"]["y"]["shape"] == [2, 5, 2]
-    assert "HuggingFaceModel('AutoModel'" in export_python(spec)
+    code = export_python(spec)
+    assert "HuggingFaceModel(" in code and "'AutoModel'," in code
 
     # 外部のコードは定義から有効にできない (引数に無い)
     names = [param.name for param in get_unit("hf.AutoModel").params]

@@ -7,8 +7,8 @@ import yaml
 from torch import nn
 
 from ml_modelcontrol import (
-    SpecError, build_model, describe_units, dump_spec, get_unit, infer,
-    load_spec, register_unit, validate
+    SpecError, build_model, describe_units, dump_spec, export_python,
+    get_unit, infer, load_spec, register_unit, validate
 )
 from ml_modelcontrol.infer import count_params
 
@@ -580,3 +580,41 @@ outputs:
     ] == [("invalid_value", "params.activation")]
     spec["nodes"]["enc"]["params"]["activation"] = "gelu"
     assert infer(spec)["outputs"]["y"]["shape"] == [2, 5, 8]
+
+
+def test_export_line_width() -> None:
+    """
+    書き出すコードの行が 79 文字に収まり, 折り返しても実行できることを
+    確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 引数の多い部品と長い引数で, 作る式と呼び出しの両方の折り返し
+    spec = make_spec("""
+inputs:
+  source_tokens: {shape: [2, 5, 32]}
+nodes:
+  encoder_block:
+    unit: nn.TransformerEncoderLayer
+    params: {d_model: 32, nhead: 4, dim_feedforward: 64, dropout: 0.0,
+             batch_first: true, norm_first: true, layer_norm_eps: 0.00001}
+    inputs: {src: source_tokens}
+    forward_params: {is_causal: false}
+outputs:
+  y: encoder_block
+""")
+    code = export_python(spec)
+    assert max(len(line) for line in code.splitlines()) <= 79
+    namespace: dict = {}
+    exec(compile(code, "<exported>", "exec"), namespace)
+    built = build_model(spec, seed=0).eval()
+    exported = namespace["Model"]().eval()
+    exported.load_state_dict(built.state_dict())
+    x = torch.randn(2, 5, 32)
+    assert torch.allclose(built(x), exported(x))

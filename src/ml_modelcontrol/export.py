@@ -110,8 +110,10 @@ def export_python(
         "        self.nodes = nn.ModuleDict({"
     ]
     for name in analysis.order:
-        code = build_code(spec, analysis, name)
-        lines.append(f"            {name!r}: {code},")
+        lines += wrap_call(
+            f"            {name!r}: {analysis.units[name].code_name}(",
+            build_args(spec, analysis, name), "),", "            "
+        )
     lines.append("        })")
     lines += forward_code(spec, analysis)
     code = "\n".join(lines) + "\n"
@@ -173,9 +175,9 @@ def check_names(spec: dict, analysis: Any, class_name: str) -> None:
         )
 
 
-def build_code(spec: dict, analysis: Any, name: str) -> str:
+def build_args(spec: dict, analysis: Any, name: str) -> list[str]:
     """
-    1 つのノードの部品を作る式を作る関数
+    1 つのノードの部品を作る式の引数を作る関数
 
     Parameters
     ----------
@@ -188,17 +190,63 @@ def build_code(spec: dict, analysis: Any, name: str) -> str:
 
     Returns
     ----------
-    code: str
-        nn.Linear(in_features=16, out_features=3) のような式
+    args: list[str]
+        in_features=16 のような引数の式の並び
     """
     # 位置の引数 (Hugging Face のモデルの種類など) と, 名前を付けた引数
     unit = analysis.units[name]
     params = spec["nodes"][name].get("params") or {}
     args = [repr(value) for value in unit.code_args]
     args += [f"{key}={to_arg(value)!r}" for key, value in params.items()]
-    code = f"{unit.code_name}({', '.join(args)})"
 
-    return code
+    return args
+
+
+def wrap_call(
+    head: str, args: list[str], tail: str, indent: str, width: int = 79
+) -> list[str]:
+    """
+    関数の呼び出しの行を, 幅に収まるように折り返す関数
+
+    Parameters
+    ----------
+    head: str
+        引数の前までの文字 (開きかっこまで)
+    args: list[str]
+        引数の式の並び
+    tail: str
+        引数の後の文字 (閉じかっこから)
+    indent: str
+        head の行の字下げ
+    width: int = 79
+        1 行の幅の上限
+
+    Returns
+    ----------
+    lines: list[str]
+        1 行に収まればその 1 行, 収まらなければ引数を次の行から詰めて並べ,
+        最後に閉じかっこの行を置いた行の並び. head と 1 つの引数が幅より
+        長い場合 (とても長いノードの名前など) は, その行だけ幅を超える
+    """
+    # 1 行に収まる場合と, 引数が無い場合はそのまま
+    line = head + ", ".join(args) + tail
+    if len(line) <= width or not args:
+        return [line]
+
+    # 引数を 1 段深い字下げで, 幅に収まるだけ詰めて並べる
+    inner = indent + "    "
+    lines = [head]
+    current = ""
+    for arg in args:
+        piece = f"{arg},"
+        candidate = f"{current} {piece}" if current else inner + piece
+        if current and len(candidate) > width:
+            lines.append(current)
+            candidate = inner + piece
+        current = candidate
+    lines += [current, indent + tail]
+
+    return lines
 
 
 def forward_code(spec: dict, analysis: Any) -> list[str]:
@@ -224,9 +272,9 @@ def forward_code(spec: dict, analysis: Any) -> list[str]:
         "        # ノードを計算の順に計算"
     ]
     for name in analysis.order:
-        lines.append(
-            f"        {var_name(name)} = self.nodes[{name!r}]"
-            f"({call_args(spec, analysis, name)})"
+        lines += wrap_call(
+            f"        {var_name(name)} = self.nodes[{name!r}](",
+            call_args(spec, analysis, name), ")", "        "
         )
 
     # 出力 (1 つならその値, 2 つ以上なら辞書)
@@ -276,7 +324,7 @@ def ref_code(analysis: Any, ref: str) -> str:
     return code
 
 
-def call_args(spec: dict, analysis: Any, name: str) -> str:
+def call_args(spec: dict, analysis: Any, name: str) -> list[str]:
     """
     ノードを呼び出す引数の式を作る関数 (組み立てたモデルと同じ渡し方)
 
@@ -291,8 +339,8 @@ def call_args(spec: dict, analysis: Any, name: str) -> str:
 
     Returns
     ----------
-    code: str
-        x, edge_index=edge_index のような引数の式
+    args: list[str]
+        x, edge_index=edge_index のような引数の式の並び
     """
     # 位置で渡す口, 可変の数の口, キーワードの口と設定の値の順
     connections = analysis.connections[name]
@@ -315,6 +363,6 @@ def call_args(spec: dict, analysis: Any, name: str) -> str:
     kwargs += [
         f"{key}={to_arg(value)!r}" for key, value in forward_params.items()
     ]
-    code = ", ".join(args + kwargs)
+    args += kwargs
 
-    return code
+    return args
