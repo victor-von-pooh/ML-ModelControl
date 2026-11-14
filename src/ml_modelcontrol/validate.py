@@ -245,13 +245,15 @@ def check_inputs(inputs: Any, issues: list[Issue]) -> list[str]:
                 f"{shape!r}",
                 location=f"inputs.{name}.shape"
             ))
-        if value.get("dtype", "float32") not in DTYPES:
+        dtype = value.get("dtype", "float32")
+        if not isinstance(dtype, str) or dtype not in DTYPES:
             issues.append(Issue(
                 "error", "invalid_dtype",
                 f"入力 {name} の dtype は {sorted(DTYPES)} のどれかにしてください",
                 location=f"inputs.{name}.dtype"
             ))
-        if value.get("fill", "zeros") not in FILLS:
+        fill = value.get("fill", "zeros")
+        if not isinstance(fill, str) or fill not in FILLS:
             issues.append(Issue(
                 "error", "invalid_fill",
                 f"入力 {name} の fill は {sorted(FILLS)} のどれかにしてください",
