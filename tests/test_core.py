@@ -727,3 +727,57 @@ outputs: {}
     # 他の誤りもある場合は計算しない
     spec["nodes"]["fc"]["params"]["out_features"] = 0
     assert infer(spec)["nodes"] == {}
+
+
+def test_extra_param_names() -> None:
+    """
+    一覧に無い引数の名前は, Python のキーワード引数として書ける名前だけに
+    することを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # **kwargs を持つ自作の部品に, 予約語と識別子でない名前の引数
+    class Scaled(nn.Module):
+        def __init__(self, scale: float = 1.0, **options: object):
+            # 親クラスのコンストラクタを呼び出す
+            super(Scaled, self).__init__()
+            self.scale = scale
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            """
+            入力を scale 倍する関数
+
+            Parameters
+            ----------
+            x: torch.Tensor
+                入力
+
+            Returns
+            ----------
+            y: torch.Tensor
+                scale 倍した値
+            """
+            y = x * self.scale
+
+            return y
+
+    register_unit(Scaled, name="custom.Scaled", overwrite=True)
+    spec = make_spec("""
+inputs:
+  x: {shape: [2, 3]}
+nodes:
+  s: {unit: custom.Scaled, inputs: x}
+outputs:
+  y: s
+""")
+    for key in ("class", "a-b"):
+        spec["nodes"]["s"]["params"] = {key: 1}
+        assert "invalid_param_name" in codes(spec)
+    spec["nodes"]["s"]["params"] = {"gain": 1}
+    assert codes(spec) == set()
