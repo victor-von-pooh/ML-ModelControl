@@ -203,3 +203,59 @@ def node_inputs(node: dict) -> Any:
         inputs = {}
 
     return inputs
+
+
+# 同梱した例のモデルの定義を置く場所
+EXAMPLES_DIR = Path(__file__).parent / "examples"
+
+
+def list_examples() -> list[dict]:
+    """
+    同梱した例のモデルの定義の一覧を返す関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    examples: list[dict]
+        名前 (ファイル名から拡張子を除いたもの) と説明
+    """
+    # 例のファイルごとに名前と説明を取り出し
+    examples = []
+    for path in sorted(EXAMPLES_DIR.glob("*.yaml")):
+        spec = load_spec(path)
+        examples.append({
+            "name": path.stem, "description": spec.get("description", "")
+        })
+
+    return examples
+
+
+def load_example(name: str) -> dict:
+    """
+    同梱した例のモデルの定義を読み込む関数
+
+    Parameters
+    ----------
+    name: str
+        例の名前 (list_examples の name)
+
+    Returns
+    ----------
+    spec: dict
+        モデルの定義
+
+    Raises
+    ----------
+    KeyError
+        例が無い場合
+    """
+    # 一覧にある名前だけを受け付け (パスとして解釈しない)
+    names = {path.stem: path for path in EXAMPLES_DIR.glob("*.yaml")}
+    if name not in names:
+        raise KeyError(f"例 {name} はありません")
+    spec = load_spec(names[name])
+
+    return spec

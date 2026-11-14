@@ -1,0 +1,36 @@
+format_version: 1
+name: gcn_graph_classifier
+description: GCN の 2 層でノードの特徴量を求め, グラフごとに平均して分類するモデル (PyTorch Geometric が必要)
+inputs:
+  x: {shape: [10, 8], ui: {x: 0, y: 40}}
+  edge_index: {shape: [2, 30], dtype: int64, ui: {x: 0, y: 180}}
+  batch: {shape: [10], dtype: int64, ui: {x: 0, y: 320}}
+nodes:
+  conv1:
+    unit: pyg.GCNConv
+    params: {in_channels: 8, out_channels: 32}
+    inputs: {x: x, edge_index: edge_index}
+    ui: {x: 240, y: 60}
+  act1:
+    unit: nn.ReLU
+    inputs: conv1
+    ui: {x: 520, y: 60}
+  conv2:
+    unit: pyg.GCNConv
+    params: {in_channels: 32, out_channels: 32}
+    inputs: {x: act1, edge_index: edge_index}
+    ui: {x: 770, y: 120}
+  pool:
+    unit: pyg.MeanAggregation
+    inputs: {x: conv2, index: batch}
+    ui: {x: 1050, y: 200}
+  head:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 2}
+    inputs: pool
+    ui: {x: 1330, y: 200}
+outputs:
+  logits: head
+ui:
+  outputs:
+    logits: {x: 1580, y: 220}

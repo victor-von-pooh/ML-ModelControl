@@ -1,0 +1,48 @@
+format_version: 1
+name: cnn_classifier
+description: 画像の分類の畳み込みのモデル (28x28 の白黒の画像, 10 クラス)
+inputs:
+  image: {shape: [4, 1, 28, 28], ui: {x: 0, y: 100}}
+nodes:
+  conv1:
+    unit: nn.Conv2d
+    params: {in_channels: 1, out_channels: 16, kernel_size: 3, padding: 1}
+    inputs: image
+    ui: {x: 220, y: 80}
+  act1:
+    unit: nn.ReLU
+    inputs: conv1
+    ui: {x: 470, y: 80}
+  pool1:
+    unit: nn.MaxPool2d
+    params: {kernel_size: 2}
+    inputs: act1
+    ui: {x: 720, y: 80}
+  conv2:
+    unit: nn.Conv2d
+    params: {in_channels: 16, out_channels: 32, kernel_size: 3, padding: 1}
+    inputs: pool1
+    ui: {x: 970, y: 80}
+  act2:
+    unit: nn.ReLU
+    inputs: conv2
+    ui: {x: 1220, y: 80}
+  pool2:
+    unit: nn.AdaptiveAvgPool2d
+    params: {output_size: 1}
+    inputs: act2
+    ui: {x: 1470, y: 80}
+  flat:
+    unit: nn.Flatten
+    inputs: pool2
+    ui: {x: 1720, y: 80}
+  head:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 10}
+    inputs: flat
+    ui: {x: 1970, y: 80}
+outputs:
+  logits: head
+ui:
+  outputs:
+    logits: {x: 2220, y: 100}

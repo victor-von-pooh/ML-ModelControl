@@ -1,0 +1,36 @@
+format_version: 1
+name: transformer_encoder
+description: Transformer のエンコーダーの 2 層で単語の列を読み, 平均して分類するモデル
+inputs:
+  ids: {shape: [4, 12], dtype: int64, fill: arange, ui: {x: 0, y: 100}}
+nodes:
+  emb:
+    unit: nn.Embedding
+    params: {num_embeddings: 100, embedding_dim: 32}
+    inputs: ids
+    ui: {x: 220, y: 80}
+  layer1:
+    unit: nn.TransformerEncoderLayer
+    params: {d_model: 32, nhead: 4, dim_feedforward: 64, batch_first: true}
+    inputs: emb
+    ui: {x: 470, y: 80}
+  layer2:
+    unit: nn.TransformerEncoderLayer
+    params: {d_model: 32, nhead: 4, dim_feedforward: 64, batch_first: true}
+    inputs: layer1
+    ui: {x: 720, y: 80}
+  pool:
+    unit: op.Mean
+    params: {dim: 1}
+    inputs: layer2
+    ui: {x: 970, y: 80}
+  head:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 2}
+    inputs: pool
+    ui: {x: 1220, y: 80}
+outputs:
+  logits: head
+ui:
+  outputs:
+    logits: {x: 1470, y: 100}
