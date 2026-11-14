@@ -1,5 +1,4 @@
 import importlib
-import importlib.util
 import inspect
 import warnings
 from typing import Any, Optional
@@ -7,9 +6,9 @@ from typing import Any, Optional
 import torch
 from torch import nn
 
+from ml_modelcontrol.libraries import has_module, register_class
 from ml_modelcontrol.registry import (
-    ParamSpec, PortSpec, UnitSpec, apply_notes, needs_module,
-    params_from_init, ports_from_forward, register
+    ParamSpec, PortSpec, UnitSpec, apply_notes, register
 )
 
 # ライブラリが無い場合も一覧に出す, PyTorch Geometric のよく使う部品
@@ -54,21 +53,79 @@ GEOMETRIC_NOTES = {
     "MaxAggregation": {"description": "ノードの特徴量をグラフごとの最大値にする"}
 }
 
-# Hugging Face のモデルの種類 (部品の名前, transformers のクラス, 説明, 出力の口)
+# Hugging Face のモデルの種類 (部品の名前, transformers のクラス, 入力
+# (text は文, image は画像), 説明, 出力の口, 分類のクラスの数を持つか)
 HUGGINGFACE_MODELS = [
     (
-        "AutoModel", "AutoModel",
-        "Hugging Face のモデルの本体 (BERT など). 出力は最後の層の隠れ状態",
+        "AutoModel", "AutoModel", "text",
+        (
+            "Hugging Face の文のモデルの本体 (BERT など). 出力は最後の層の"
+            "隠れ状態"
+        ),
         [("last_hidden_state", "最後の層の隠れ状態 (バッチ, 系列, 隠れ層)"),
-         ("pooler_output", "文全体の表現 (モデルによっては None)")]
+         ("pooler_output", "文全体の表現 (モデルによっては None)")],
+        False
     ),
     (
         "AutoModelForSequenceClassification",
-        "AutoModelForSequenceClassification",
+        "AutoModelForSequenceClassification", "text",
         "Hugging Face の文の分類のモデル. 出力は分類のロジット",
-        [("logits", "分類のロジット (バッチ, num_labels)")]
+        [("logits", "分類のロジット (バッチ, num_labels)")], True
+    ),
+    (
+        "AutoModelForTokenClassification", "AutoModelForTokenClassification",
+        "text",
+        "Hugging Face の単語ごとの分類のモデル (固有表現の抽出など)",
+        [("logits", "単語ごとのロジット (バッチ, 系列, num_labels)")], True
+    ),
+    (
+        "AutoModelForMaskedLM", "AutoModelForMaskedLM", "text",
+        "Hugging Face の穴埋めの言語モデル (BERT など)",
+        [("logits", "語彙ごとのロジット (バッチ, 系列, 語彙)")], False
+    ),
+    (
+        "AutoModelForCausalLM", "AutoModelForCausalLM", "text",
+        "Hugging Face の次の単語を予測する言語モデル (GPT など)",
+        [("logits", "語彙ごとのロジット (バッチ, 系列, 語彙)")], False
+    ),
+    (
+        "AutoModelForQuestionAnswering", "AutoModelForQuestionAnswering",
+        "text",
+        "Hugging Face の抜き出し型の質問応答のモデル",
+        [("start_logits", "答えの始まりの位置のロジット (バッチ, 系列)"),
+         ("end_logits", "答えの終わりの位置のロジット (バッチ, 系列)")],
+        False
+    ),
+    (
+        "AutoVisionModel", "AutoModel", "image",
+        (
+            "Hugging Face の画像のモデルの本体 (ViT など. transformers の "
+            "AutoModel に画像を渡す)"
+        ),
+        [("last_hidden_state", "最後の層の隠れ状態 (バッチ, 系列, 隠れ層)"),
+         ("pooler_output", "画像全体の表現 (モデルによっては None)")],
+        False
+    ),
+    (
+        "AutoModelForImageClassification", "AutoModelForImageClassification",
+        "image",
+        "Hugging Face の画像の分類のモデル. 出力は分類のロジット",
+        [("logits", "分類のロジット (バッチ, num_labels)")], True
     )
 ]
+
+# 入力の種類ごとの口
+HUGGINGFACE_INPUTS = {
+    "text": [
+        PortSpec("input_ids", "単語の番号 (バッチ, 系列) の int64"),
+        PortSpec("attention_mask", "注意のマスク (1 が使う位置)",
+                 optional=True),
+        PortSpec("token_type_ids", "文の区別の番号", optional=True)
+    ],
+    "image": [
+        PortSpec("pixel_values", "画像 (バッチ, 3, 高さ, 幅)")
+    ]
+}
 
 # Hugging Face のモデルの共通の引数
 HUGGINGFACE_PARAMS = [
@@ -87,7 +144,8 @@ class HuggingFaceModel(nn.Module):
     def __init__(
         self, kind: str, model_name: str, pretrained: bool = True,
         revision: str = "main", local_files_only: bool = False,
-        num_labels: Optional[int] = None
+        num_labels: Optional[int] = None,
+        ignore_mismatched_sizes: bool = False
     ):
         # 親クラスのコンストラクタを呼び出す
         super(HuggingFaceModel, self).__init__()
@@ -103,7 +161,8 @@ class HuggingFaceModel(nn.Module):
         extra = {} if num_labels is None else {"num_labels": num_labels}
         if pretrained:
             self.model = model_cls.from_pretrained(
-                model_name, **options, **extra
+                model_name, **options, **extra,
+                ignore_mismatched_sizes=ignore_mismatched_sizes
             )
         else:
             config = transformers.AutoConfig.from_pretrained(
@@ -112,21 +171,24 @@ class HuggingFaceModel(nn.Module):
             self.model = model_cls.from_config(config)
 
     def forward(
-        self, input_ids: torch.Tensor,
+        self, input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        token_type_ids: Optional[torch.Tensor] = None
+        token_type_ids: Optional[torch.Tensor] = None,
+        pixel_values: Optional[torch.Tensor] = None
     ) -> Any:
         """
-        単語の番号から, モデルの出力を求める関数
+        単語の番号か画像から, モデルの出力を求める関数
 
         Parameters
         ----------
-        input_ids: torch.Tensor
-            単語の番号 (バッチ, 系列) の int64
+        input_ids: Optional[torch.Tensor] = None
+            単語の番号 (バッチ, 系列) の int64 (文のモデルの場合)
         attention_mask: Optional[torch.Tensor] = None
             注意のマスク (1 が使う位置), None の場合は全て使う
         token_type_ids: Optional[torch.Tensor] = None
             文の区別の番号, None の場合は渡さない
+        pixel_values: Optional[torch.Tensor] = None
+            画像 (バッチ, 3, 高さ, 幅) (画像のモデルの場合)
 
         Returns
         ----------
@@ -134,33 +196,16 @@ class HuggingFaceModel(nn.Module):
             transformers のモデルの出力 (last_hidden_state などを持つ)
         """
         # 渡した値だけをキーワードで受け渡し
-        kwargs = {"input_ids": input_ids}
-        if attention_mask is not None:
-            kwargs["attention_mask"] = attention_mask
-        if token_type_ids is not None:
-            kwargs["token_type_ids"] = token_type_ids
+        values = {
+            "input_ids": input_ids, "attention_mask": attention_mask,
+            "token_type_ids": token_type_ids, "pixel_values": pixel_values
+        }
+        kwargs = {
+            key: value for key, value in values.items() if value is not None
+        }
         outputs = self.model(**kwargs)
 
         return outputs
-
-
-def has_module(name: str) -> bool:
-    """
-    ライブラリが入っているかを, 読み込まずに確かめる関数
-
-    Parameters
-    ----------
-    name: str
-        ライブラリの名前
-
-    Returns
-    ----------
-    found: bool
-        入っていれば True
-    """
-    found = importlib.util.find_spec(name) is not None
-
-    return found
 
 
 def load_geometric_units() -> None:
@@ -239,55 +284,12 @@ def register_geometric_unit(cls: type, category: str) -> UnitSpec:
     spec: UnitSpec
         登録した部品
     """
-    # シグネチャから引数と口を取り出し, 作る関数を用意
-    params, extra = params_from_init(cls)
-    inputs, forward_params = ports_from_forward(cls)
-
-    def builder(**values: object) -> nn.Module:
-        """
-        引数の値から部品を作る関数
-
-        Parameters
-        ----------
-        **values: object
-            クラスに渡す引数
-
-        Returns
-        ----------
-        module: nn.Module
-            作った部品
-        """
-        module = cls(**values)
-
-        return module
-
-    spec = UnitSpec(
-        name=f"pyg.{cls.__name__}", category=category,
-        source="torch_geometric", params=params, inputs=inputs,
-        outputs=[PortSpec("out")], forward_params=forward_params,
-        extra_params=extra, builder=builder, code_name=cls.__name__,
-        code_import=f"from torch_geometric.nn import {cls.__name__}"
+    # 他のライブラリのクラスと同じ方法で登録
+    spec = register_class(
+        cls, f"pyg.{cls.__name__}", category, "torch_geometric",
+        cls.__name__, f"from torch_geometric.nn import {cls.__name__}",
+        GEOMETRIC_NOTES.get(cls.__name__, {})
     )
-    apply_notes(spec, GEOMETRIC_NOTES.get(cls.__name__, {}))
-
-    # 別の部品やテンソルを引数に取るクラス (GINConv, PNAConv など) と,
-    # 辞書の入力を取るクラス (異種グラフの層) は今は対象外
-    if needs_module(cls):
-        spec.available = False
-        spec.reason = (
-            "引数に別の部品 (nn.Module) かテンソルが必要なので, 今は定義から"
-            "作れません"
-        )
-    if any(port.name.endswith("_dict") for port in inputs):
-        spec.available = False
-        spec.reason = "辞書の入力 (異種グラフ) は, 今は定義からつなげません"
-
-    # 他の口の後ろの *args は省略できる口 (追加の値)
-    if len(inputs) > 1:
-        for port in inputs:
-            if port.variadic:
-                port.optional = True
-    register(spec)
 
     return spec
 
@@ -308,35 +310,45 @@ def load_huggingface_units() -> None:
     """
     # 種類ごとに, 共通の引数と口で登録
     available = has_module("transformers")
-    for name, kind, description, outputs in HUGGINGFACE_MODELS:
+    for name, kind, input_kind, description, outputs, labels in (
+        HUGGINGFACE_MODELS
+    ):
         params = [ParamSpec(**vars(param)) for param in HUGGINGFACE_PARAMS]
-        if name == "AutoModelForSequenceClassification":
-            params.append(ParamSpec(
-                "num_labels", "int", 2, description="分類のクラスの数",
-                minimum=1
-            ))
+        if labels:
+            params += [
+                ParamSpec(
+                    "num_labels", "int", 2, description="分類のクラスの数",
+                    minimum=1
+                ),
+                ParamSpec(
+                    "ignore_mismatched_sizes", "bool", False,
+                    description=(
+                        "学習済みの分類の層と num_labels が違う場合に, 分類の"
+                        "層を作り直すか"
+                    )
+                )
+            ]
         register(UnitSpec(
             name=f"hf.{name}", category="huggingface", source="transformers",
             description=description, params=params,
             inputs=[
-                PortSpec("input_ids", "単語の番号 (バッチ, 系列) の int64"),
-                PortSpec("attention_mask", "注意のマスク (1 が使う位置)",
-                         optional=True),
-                PortSpec("token_type_ids", "文の区別の番号", optional=True)
+                PortSpec(**vars(port))
+                for port in HUGGINGFACE_INPUTS[input_kind]
             ],
             outputs=[
                 PortSpec(port, text, path=[port]) for port, text in outputs
             ],
             available=available,
             reason="" if available else (
-                "Hugging Face の transformers が入っていません"
+                "Hugging Face の transformers が入っていません (pip install "
+                "\"ml-modelcontrol[huggingface]\")"
             ),
             builder=make_huggingface_builder(kind),
             code_name="HuggingFaceModel",
             code_import=(
                 "from ml_modelcontrol.external import HuggingFaceModel"
             ),
-            code_args=[kind]
+            code_args=[kind], offline={"pretrained": False}
         ))
 
 

@@ -7,7 +7,7 @@ ML-ModelControl の設計の方針をまとめる.
 PyTorch (と互換のライブラリ) で作れるモデルの部品を登録簿として持ち, 部品をつないだ定義から `nn.Module` を組み立てる.
 モデルを Python で書かずに, 定義 (YAML か JSON) を書くか, GUI (ML-CreateArchitecture) で部品を置いてつなぐだけで作れるようにする.
 
-- 部品の単位は 1 つに決めない. `nn.Linear` のような層, 足し算や連結のような演算, PyTorch Geometric のグラフニューラルネットワークの層, Hugging Face の学習済みのモデルを, 同じ登録簿で同じように扱う
+- 部品の単位は 1 つに決めない. `nn.Linear` のような層, 足し算や連結のような演算, PyTorch Geometric のグラフニューラルネットワークの層, Hugging Face, torchvision, timm などの学習済みのモデルを, 同じ登録簿で同じように扱う
 - GUI が必要とすること (部品の一覧と引数の説明, つなぎ方の確認, 各部品の出力の形, パラメータ数) は, このライブラリが返す. GUI は描画と編集だけを受け持つ
 - 学習はこのライブラリの対象外. 組み立てたモデルは普通の `nn.Module` なので, ML-Found などで学習できる
 
@@ -89,7 +89,14 @@ outputs:
 | `torch.nn` | `nn.<クラス名>` | `torch.nn` の層. 引数と入力の口はシグネチャから取り出し, よく使うものには説明と範囲を付ける (入れ物, 損失関数, 遅延初期化の `Lazy*` は除く) |
 | 演算 | `op.<名前>` | `Add`, `Multiply`, `Concat`, `Stack`, `Reshape`, `Permute`, `Transpose`, `Mean`, `Select` (タプルの要素), `GetAttr` (出力の属性) など. `torch.nn.functional` は使わず, 全てモジュールとして作る |
 | PyTorch Geometric | `pyg.<クラス名>` | `torch_geometric.nn` の畳み込みの層と集約の層. ライブラリが入っている場合だけ使える |
-| Hugging Face | `hf.AutoModel` など | モデルの名前 (またはローカルのパス) から読み込む. 重みを読むか, 設定だけから作るかを選べる. ライブラリが入っている場合だけ使える |
+| Hugging Face | `hf.AutoModel`, `hf.AutoModelForImageClassification` など | モデルの名前 (またはローカルのパス) から読み込む. 文 (`input_ids`) を受け取る種類と画像 (`pixel_values`) を受け取る種類がある. 重みを読むか, 設定だけから作るかを選べる. ライブラリが入っている場合だけ使える |
+| torchvision | `tv.<クラス名>`, `tv.Model` | `torchvision.ops` の層 (`DeformConv2d`, `SqueezeExcitation`, `StochasticDepth` など) と, 名前で作るモデル (`tv.Model`. `resnet18` などを `torchvision.models.get_model` で作る) |
+| timm | `timm.<クラス名>`, `timm.Model` | `timm.layers` の層 (`Mlp`, `Attention`, `DropPath` など) と, 名前で作るモデル (`timm.Model`. `timm.create_model` で作る) |
+| torchaudio | `audio.<クラス名>` | `torchaudio.transforms` の変換 (`MelSpectrogram`, `MFCC` など) と `torchaudio.models` のモデル (`Conformer`, `Wav2Letter` など) |
+| einops | `einops.<クラス名>` | `Rearrange`, `Reduce`, `EinMix` (式で次元を並べ替え, まとめる) |
+| Kornia | `kornia.<クラス名>` | 画像の拡張 (`kornia.augmentation`), フィルタ, 色の変換, 明るさの調整, 幾何の変換の層 |
+| MONAI | `monai.<クラス名>` | 医用画像のネットワーク (`monai.networks.nets`. `UNet`, `SwinUNETR` など) と部品 (`monai.networks.blocks`) |
+| segmentation_models_pytorch | `smp.<クラス名>` | 画像の領域分割のモデル (`Unet`, `FPN`, `DeepLabV3Plus` など. 符号化器を名前で選ぶ) |
 | 自作 | 登録した名前 | `register_unit` で `nn.Module` のクラスを登録する (Python のコードから. モデルの定義からは登録できない) |
 
 ### 口
@@ -117,8 +124,13 @@ outputs:
 
 ## 外部のライブラリ
 
-- PyTorch Geometric と Hugging Face の transformers は任意の依存 (`pip install "ml-modelcontrol[geometric]"`, `[huggingface]`). 入っていない環境でも, 残りの部品は使える
-- Hugging Face のモデルを名前で読む場合はネットワークを使う. 確認と形の推定では, 重みを読まずに設定だけから作ることもできる
+- 外部のライブラリは全て任意の依存 (`pip install "ml-modelcontrol[geometric]"` のようにライブラリごとに選ぶか, `[all]` で全て). 入っていない環境でも, 残りの部品は使える. 入っていないライブラリは, よく使う部品だけを「使えない」として理由付きで一覧に出す
+- 部品の取り込み方は 2 つ. (1) **クラスを集める**: ライブラリのモジュールの `nn.Module` のクラスを, PyTorch Geometric と同じくシグネチャから引数と口を取り出して部品にする (土台のクラス, 入れ物, 別名は除く. 引数に別の部品が必要なクラスは「使えない」). (2) **名前で作る**: torchvision と timm のモデルは数が多く, クラスより名前で選ぶ方が分かりやすいので, モデルの名前を引数に持つ 1 つの部品にする. 名前の候補 (`suggestions`) は一覧に付けるが, 候補以外も書ける (新しいモデルのため)
+- 部品の名前は `<頭>.<クラス名>`. 頭はライブラリごとに決め (`tv` は torchvision, `audio` は torchaudio, `smp` は segmentation_models_pytorch, 他はライブラリの名前), 分類は `<頭>_<モジュール>` (`tv_ops`, `kornia_filters` など). 同じライブラリの複数のモジュールに同じ名前のクラスがある場合 (`kornia.augmentation.Normalize` と `kornia.enhance.Normalize` など), 先に集めたモジュールのクラスを `kornia.Normalize`, 後のモジュールのクラスを `kornia.enhance.Normalize` のようにモジュールの名前を挟んで区別する
+- 名前で作る部品のモデルの名前の引数は, ライブラリの関数の引数の名前に合わせる (`tv.Model` は `name`, `timm.Model` と Hugging Face は `model_name`. 書き出すコードがそのまま関数の呼び出しになるため). Hugging Face の部品の名前は transformers のクラスの名前に合わせる. ただし `hf.AutoVisionModel` は, 画像を受け取る `AutoModel` (ViT などの本体) を文のモデルと区別するための名前
+- 書き出すコードでは, ライブラリのモジュールを別名 (`from torchvision import ops as tv_ops` など) で読み込み, 違うライブラリの同じ名前のクラスが重ならないようにする
+- 学習済みの重みを読む引数 (`pretrained`, `weights`, `encoder_weights` など) を部品ごとに持ち (`offline`), 形の推定ではその引数を「読まない」値に置き換える (`tv.Model` は `weights` と, 検出と領域分割のモデルの `weights_backbone`) (形は重みに依らず, 大きな重みの取得を避けるため). 組み立て (`build_model`) では書いた値のまま使う
+- Hugging Face のモデルを名前で読む場合はネットワークを使う (形の推定でも設定の取得に使う). 確認では使わない
 
 ## 段階
 
