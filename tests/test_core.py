@@ -781,3 +781,25 @@ outputs:
         assert "invalid_param_name" in codes(spec)
     spec["nodes"]["s"]["params"] = {"gain": 1}
     assert codes(spec) == set()
+
+
+def test_export_name_warning() -> None:
+    """
+    書き出すコードで使う名前のノードに, 確認で注意を出すことを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 確認の時点で注意 (組み立てはできる), 書き出しは失敗
+    spec = make_spec()
+    spec["nodes"]["result"] = spec["nodes"].pop("act")
+    spec["nodes"]["add"]["inputs"] = {"xs": ["x", "result"]}
+    assert "export_name" in codes(spec)
+    build_model(spec)
+    with pytest.raises(ValueError, match="重なる"):
+        export_python(spec)
