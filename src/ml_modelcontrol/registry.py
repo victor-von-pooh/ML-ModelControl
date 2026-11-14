@@ -1,15 +1,11 @@
 import inspect
 import math
 from dataclasses import asdict, dataclass, field
+from types import UnionType
 from typing import (
     Any, Callable, Literal, Optional, Union, get_args, get_origin,
     get_type_hints
 )
-
-try:
-    from types import UnionType
-except ImportError:
-    UnionType = None  # type: ignore[assignment,misc]
 
 from torch import nn
 
@@ -240,8 +236,11 @@ def kind_of(annotation: Any, default: Any) -> str:
     """
     # 型ヒントが単純な型ならその種類, 選択肢なら str, それ以外は any
     simple = {bool: "bool", int: "int", float: "float", str: "str"}
+    names = {"bool": "bool", "int": "int", "float": "float", "str": "str"}
     if annotation is not inspect.Parameter.empty:
-        if annotation in simple:
+        if isinstance(annotation, str):
+            kind = names.get(annotation.strip(), "any")
+        elif annotation in simple:
             kind = simple[annotation]
         elif get_origin(annotation) is Literal and all(
             isinstance(value, str) for value in get_args(annotation)
@@ -302,7 +301,7 @@ def needs_module(cls: type) -> bool:
         必須の引数の型ヒントが nn.Module か Callable なら True
     """
     # 既定値の無い引数の型ヒントを確認
-    # 文字の型ヒント (from __future__ import annotations) は型に直す
+    # 文字の型ヒント (from __future__ import annotations) の型への変換
     needed = False
     try:
         hints = get_type_hints(cls.__init__)
@@ -348,7 +347,7 @@ def needs_object(annotation: Any) -> bool:
         needed = all(needs_object(option) for option in options)
         return needed
 
-    # 型に直せなかった文字の型ヒントは, 値の型を含めば渡せるものとする
+    # 型に直せなかった文字の型ヒントは, 値の型を含めば渡せるものと判定
     text = str(annotation)
     values = ("int", "float", "tuple", "list", "str", "bool")
     if isinstance(annotation, str) and "Tensor" in text and not any(
@@ -378,9 +377,7 @@ def is_union(annotation: Any) -> bool:
         Union なら True
     """
     origin = get_origin(annotation)
-    union = origin is Union or (
-        UnionType is not None and origin is UnionType
-    )
+    union = origin is Union or origin is UnionType
 
     return union
 
@@ -407,8 +404,12 @@ def params_from_init(cls: type) -> tuple[list[ParamSpec], bool]:
     if cls.__init__ is nn.Module.__init__:
         return params, extra
 
-    # シグネチャの引数を順に変換
+    # シグネチャの引数を順に変換 (文字の型ヒントは型に直して使用)
     signature = inspect.signature(cls.__init__)
+    try:
+        hints = get_type_hints(cls.__init__)
+    except Exception:
+        hints = {}
     for name, parameter in signature.parameters.items():
         if parameter.kind is inspect.Parameter.VAR_KEYWORD:
             extra = True
@@ -419,10 +420,13 @@ def params_from_init(cls: type) -> tuple[list[ParamSpec], bool]:
             continue
         required = parameter.default is inspect.Parameter.empty
         default = None if required else parameter.default
+        annotation = parameter.annotation
+        if isinstance(annotation, str):
+            annotation = hints.get(name, annotation)
         params.append(ParamSpec(
-            name=name, kind=kind_of(parameter.annotation, parameter.default),
+            name=name, kind=kind_of(annotation, parameter.default),
             default=to_plain(default), required=required,
-            choices=choices_of(parameter.annotation)
+            choices=choices_of(annotation)
         ))
 
     return params, extra

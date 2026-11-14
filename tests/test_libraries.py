@@ -39,7 +39,8 @@ CASES = [
       "channels": [4, 8], "strides": [2]}, "x", [1, 1, 16, 16],
      [1, 2, 16, 16]),
     ("segmentation_models_pytorch", "smp.Unet",
-     {"encoder_name": "resnet18", "encoder_depth": 3,
+     {"encoder_name": "resnet18", "encoder_weights": None,
+      "encoder_depth": 3,
       "decoder_channels": [16, 8, 4], "classes": 3}, "x", [1, 3, 32, 32],
      [1, 3, 32, 32])
 ]
@@ -113,7 +114,7 @@ def test_library_units(
     ----------
     None
     """
-    # ライブラリが無い場合は使えない部品として, 入れ方の案内付きで出る
+    # ライブラリが無い場合は, 入れ方の案内付きの使えない部品
     if not has_module(package):
         spec = get_unit(unit)
         assert not spec.available
@@ -157,7 +158,7 @@ def test_library_listing() -> None:
     ----------
     None
     """
-    # 名前で作るモデルは, ライブラリが入っていれば名前の候補を持つ
+    # 名前で作るモデルの, 名前の候補 (ライブラリが入っている場合)
     units = {unit["name"]: unit for unit in describe_units()}
     for name, key, package in (
         ("tv.Model", "name", "torchvision"),
@@ -167,10 +168,12 @@ def test_library_listing() -> None:
         if has_module(package):
             assert "resnet18" in params[key]["suggestions"]
         assert "offline" not in units[name]
-    assert get_unit("tv.Model").offline == {"weights": None}
+    assert get_unit("tv.Model").offline == {
+        "weights": None, "weights_backbone": None
+    }
     assert get_unit("hf.AutoModel").offline == {"pretrained": False}
 
-    # 違うライブラリのクラスは別名のモジュールから読み込む
+    # 違うライブラリのクラスの, 別名のモジュールからの読み込み
     if has_module("torchvision"):
         unit = get_unit("tv.DeformConv2d")
         assert unit.code_name == "tv_ops.DeformConv2d"
@@ -226,12 +229,13 @@ def test_offline_values_in_infer() -> None:
 
     register(UnitSpec(
         name="test.Pretrained", category="test", source="custom",
-        params=[ParamSpec("pretrained", "bool", True)], inputs=[PortSpec("x")], outputs=[PortSpec("out")],
+        params=[ParamSpec("pretrained", "bool", True)],
+        inputs=[PortSpec("x")], outputs=[PortSpec("out")],
         builder=lambda **values: Pretrained(**values),
         offline={"pretrained": False}
     ))
 
-    # 書いていなくても, 書いていても, 推定では読まない
+    # 書いていない場合も書いた場合も, 推定では読まない値
     for params in ({}, {"pretrained": True}):
         spec = one_node_spec("test.Pretrained", params, "x", [3, 4])
         result = infer(spec)
@@ -254,7 +258,7 @@ def test_needs_object() -> None:
     ----------
     None
     """
-    # 値の選択肢を含む Union は渡せる, 部品とテンソルだけは渡せない
+    # 値の選択肢を含む Union は渡せる値, 部品とテンソルだけは渡せない値
     assert not needs_object(Union[torch.Tensor, tuple[float, float]])
     assert not needs_object(Union[float, torch.Tensor])
     assert needs_object(torch.Tensor)

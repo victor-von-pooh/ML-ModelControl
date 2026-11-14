@@ -15,7 +15,7 @@ from ml_modelcontrol.registry import (
 # 学習済みの重みを読む引数と, 形の推定で置き換える「読まない」値
 OFFLINE_VALUES = {
     "pretrained": False, "pretrained_backbone": False,
-    "encoder_weights": None, "weights_backbone": None
+    "encoder_weights": None
 }
 
 
@@ -33,6 +33,10 @@ class ClassSource:
     # 書き出すコードでモジュールに付ける別名 (tv_ops など)
     alias: str
 
+    # 同じ頭の他のモジュールと名前が重なる場合に挟む名前 (enhance など.
+    # kornia.enhance.Normalize のようにする)
+    sub: str
+
     # ライブラリが無い場合も一覧に出す, よく使う部品
     common: list[str] = field(default_factory=list)
 
@@ -40,66 +44,89 @@ class ClassSource:
 # クラスを集めて部品にするライブラリのモジュール
 CLASS_SOURCES = [
     ClassSource(
-        "torchvision", "torchvision.ops", "tv", "torchvision", "vision_ops",
-        "tv_ops",
+        "torchvision", "torchvision.ops", "tv", "torchvision", "tv_ops",
+        "tv_ops", "ops",
         ["DeformConv2d", "SqueezeExcitation", "StochasticDepth",
          "Conv2dNormActivation", "FrozenBatchNorm2d", "MLP"]
     ),
     ClassSource(
         "timm", "timm.layers", "timm", "timm", "timm_layers", "timm_layers",
-        ["Mlp", "Attention", "DropPath", "PatchEmbed", "LayerNorm2d"]
+        "layers", ["Mlp", "Attention", "DropPath", "PatchEmbed", "LayerNorm2d"]
     ),
     ClassSource(
         "torchaudio", "torchaudio.transforms", "audio", "torchaudio",
-        "audio_transforms", "ta_transforms",
+        "audio_transforms", "ta_transforms", "transforms",
         ["Spectrogram", "MelSpectrogram", "MFCC", "AmplitudeToDB",
          "Resample", "FrequencyMasking", "TimeMasking"]
     ),
     ClassSource(
         "torchaudio", "torchaudio.models", "audio", "torchaudio",
-        "audio_models", "ta_models",
+        "audio_models", "ta_models", "models",
         ["Conformer", "Wav2Letter", "ConvTasNet"]
     ),
     ClassSource(
-        "einops", "einops.layers.torch", "einops", "einops", "einops",
-        "einops_layers", ["Rearrange", "Reduce", "EinMix"]
+        "einops", "einops.layers.torch", "einops", "einops", "einops_layers",
+        "einops_layers", "layers", ["Rearrange", "Reduce", "EinMix"]
     ),
     ClassSource(
         "kornia", "kornia.augmentation", "kornia", "kornia",
-        "kornia_augmentation", "kornia_aug",
+        "kornia_augmentation", "kornia_aug", "augmentation",
         ["RandomHorizontalFlip", "RandomResizedCrop", "ColorJitter",
-         "Normalize"]
+         "Normalize", "Resize"]
     ),
     ClassSource(
         "kornia", "kornia.filters", "kornia", "kornia", "kornia_filters",
-        "kornia_filters", ["GaussianBlur2d", "Sobel"]
+        "kornia_filters", "filters", ["GaussianBlur2d", "Sobel"]
     ),
     ClassSource(
         "kornia", "kornia.color", "kornia", "kornia", "kornia_color",
-        "kornia_color", ["RgbToGrayscale", "RgbToHsv"]
+        "kornia_color", "color", ["RgbToGrayscale", "RgbToHsv"]
     ),
     ClassSource(
         "kornia", "kornia.enhance", "kornia", "kornia", "kornia_enhance",
-        "kornia_enhance", []
+        "kornia_enhance", "enhance", []
     ),
     ClassSource(
         "kornia", "kornia.geometry.transform", "kornia", "kornia",
-        "kornia_geometry", "kornia_geometry", ["Resize"]
+        "kornia_geometry", "kornia_geometry", "geometry", []
     ),
     ClassSource(
         "monai", "monai.networks.nets", "monai", "monai", "monai_nets",
-        "monai_nets", ["UNet", "BasicUNet", "SwinUNETR", "DenseNet121"]
+        "monai_nets", "nets",
+        ["UNet", "BasicUNet", "SwinUNETR", "DenseNet121"]
     ),
     ClassSource(
         "monai", "monai.networks.blocks", "monai", "monai", "monai_blocks",
-        "monai_blocks", ["Convolution", "ResidualUnit"]
+        "monai_blocks", "blocks", ["Convolution", "ResidualUnit"]
     ),
     ClassSource(
         "segmentation_models_pytorch", "segmentation_models_pytorch", "smp",
-        "segmentation_models_pytorch", "segmentation", "smp",
+        "segmentation_models_pytorch", "smp_models", "smp", "models",
         ["Unet", "FPN", "DeepLabV3Plus"]
     )
 ]
+
+# シグネチャからは分からない, 定義から作れないクラスと理由
+UNAVAILABLE_CLASSES = {
+    "kornia.RandomDissolving": "diffusers のモデルが必要なので, 今は使えません",
+    "kornia.StableDiffusionDissolving": (
+        "diffusers のモデルが必要なので, 今は使えません"
+    ),
+    "monai.BertMixedLayer": (
+        "引数に設定のオブジェクトが必要なので, 今は定義から作れません"
+    ),
+    "monai.Transchex": (
+        "作るときに必ず BERT の重みを取得するので, 今は定義から作れません"
+    ),
+    "monai.MultiModal": (
+        "作るときに必ず BERT の重みを取得するので, 今は定義から作れません"
+    )
+}
+
+# 部品ごとの, 学習済みの重みを読む引数の「読まない」値 (共通の名前以外)
+CLASS_OFFLINE = {
+    "monai.HoVerNet": {"pretrained_url": None}
+}
 
 # ライブラリごとの, 入れる方法の案内 (pip の任意の依存の名前)
 EXTRAS = {
@@ -292,8 +319,9 @@ def register_class(
     code_import: str, notes: Optional[dict] = None
 ) -> UnitSpec:
     """
-    外部のライブラリの nn.Module のクラスを, シグネチャから部品として登録
-    する関数
+    外部のライブラリのクラスを部品として登録する関数
+
+    引数と口は nn.Module のクラスのシグネチャから取り出す
 
     Parameters
     ----------
@@ -324,6 +352,7 @@ def register_class(
         param.name: OFFLINE_VALUES[param.name] for param in params
         if param.name in OFFLINE_VALUES
     }
+    offline.update(CLASS_OFFLINE.get(name, {}))
     spec = UnitSpec(
         name=name, category=category, source=source, params=params,
         inputs=inputs, outputs=[PortSpec("out")],
@@ -344,6 +373,9 @@ def register_class(
     if any(port.name.endswith("_dict") for port in inputs):
         spec.available = False
         spec.reason = "辞書の入力は, 今は定義からつなげません"
+    if name in UNAVAILABLE_CLASSES:
+        spec.available = False
+        spec.reason = UNAVAILABLE_CLASSES[name]
 
     # 他の口の後ろの *args は省略できる口 (追加の値)
     if len(inputs) > 1:
@@ -390,7 +422,8 @@ def load_class_source(item: ClassSource) -> None:
     ライブラリのモジュールのクラスを集めて, 部品として登録する関数
 
     ライブラリが無い場合は, よく使う部品を使えないものとして登録する.
-    同じ頭の名前が他のモジュールで登録済みの場合は, 先に登録したものを残す
+    同じ頭の名前が他のモジュールで登録済みの場合は, 頭の後ろにモジュール
+    の名前を挟む (kornia.enhance.Normalize など)
 
     Parameters
     ----------
@@ -414,6 +447,7 @@ def load_class_source(item: ClassSource) -> None:
         return
 
     # 公開された名前のクラスを順に登録 (取り出せないクラスは除外)
+    # 同じ頭の他のモジュールで登録済みの名前は, モジュールの名前を挟む
     parent, _, leaf = item.module.rpartition(".")
     code_import = (
         f"from {parent} import {leaf} as {item.alias}" if parent
@@ -422,13 +456,14 @@ def load_class_source(item: ClassSource) -> None:
     names = getattr(module, "__all__", None) or dir(module)
     for name in names:
         cls = getattr(module, name, None)
-        unit_name = f"{item.prefix}.{name}"
-        if skipped_class(name, cls) or (
-            unit_name in REGISTRY
-            and REGISTRY[unit_name].source == item.source
-            and REGISTRY[unit_name].available
-        ):
+        if skipped_class(name, cls):
             continue
+        unit_name = f"{item.prefix}.{name}"
+        taken = REGISTRY.get(unit_name)
+        if taken is not None and taken.source == item.source and (
+            taken.code_import != code_import
+        ):
+            unit_name = f"{item.prefix}.{item.sub}.{name}"
         try:
             register_class(
                 cls, unit_name, item.category, item.source,
@@ -439,7 +474,9 @@ def load_class_source(item: ClassSource) -> None:
             continue
 
 
-def make_factory_builder(factory: Callable[..., nn.Module]) -> Any:
+def make_factory_builder(
+    factory: Callable[..., nn.Module]
+) -> Callable[..., nn.Module]:
     """
     名前でモデルを作る関数を, 部品を作る関数にする関数
 
@@ -450,7 +487,7 @@ def make_factory_builder(factory: Callable[..., nn.Module]) -> Any:
 
     Returns
     ----------
-    builder: Any
+    builder: Callable[..., nn.Module]
         引数を受け取ってモデルを作る関数
     """
     def builder(**values: Any) -> nn.Module:
@@ -474,6 +511,53 @@ def make_factory_builder(factory: Callable[..., nn.Module]) -> Any:
     return builder
 
 
+def make_torchvision_builder(models: Any) -> Callable[..., nn.Module]:
+    """
+    torchvision のモデルを名前で作る関数を作る関数
+
+    Parameters
+    ----------
+    models: Any
+        torchvision.models のモジュール
+
+    Returns
+    ----------
+    builder: Callable[..., nn.Module]
+        引数を受け取ってモデルを作る関数
+    """
+    def builder(name: str, **values: Any) -> nn.Module:
+        """
+        モデルの名前と引数からモデルを作る関数
+
+        形の推定で加える weights_backbone=None は, その引数を持つモデル
+        (検出と領域分割のモデル) にだけ渡す
+
+        Parameters
+        ----------
+        name: str
+            モデルの名前 (resnet18 など)
+        **values: Any
+            モデルに渡す引数
+
+        Returns
+        ----------
+        module: nn.Module
+            作ったモデル
+        """
+        accepted = inspect.signature(
+            models.get_model_builder(name)
+        ).parameters
+        if values.get("weights_backbone", 0) is None and (
+            "weights_backbone" not in accepted
+        ):
+            values.pop("weights_backbone")
+        module = models.get_model(name, **values)
+
+        return module
+
+    return builder
+
+
 def load_torchvision_models() -> None:
     """
     torchvision のモデルを名前で作る部品 (tv.Model) を登録する関数
@@ -489,7 +573,7 @@ def load_torchvision_models() -> None:
     # 名前の候補はライブラリにあるモデルの一覧
     models, reason = import_quietly("torchvision.models")
     spec = UnitSpec(
-        name="tv.Model", category="vision_models", source="torchvision",
+        name="tv.Model", category="tv_models", source="torchvision",
         description=(
             "torchvision のモデルを名前 (resnet18, vit_b_16 など) で作る. "
             "入力は (バッチ, 3, 高さ, 幅) の画像"
@@ -518,10 +602,10 @@ def load_torchvision_models() -> None:
         available=models is not None, reason=reason,
         code_name="tv_models.get_model",
         code_import="from torchvision import models as tv_models",
-        offline={"weights": None}
+        offline={"weights": None, "weights_backbone": None}
     )
     if models is not None:
-        spec.builder = make_factory_builder(models.get_model)
+        spec.builder = make_torchvision_builder(models)
     register(spec)
 
 
@@ -580,8 +664,10 @@ def load_timm_models() -> None:
 
 def load_library_units() -> None:
     """
-    外部のライブラリ (torchvision, timm, torchaudio, einops, Kornia, MONAI,
-    segmentation_models_pytorch) の部品を登録簿に読み込む関数
+    外部のライブラリの部品を登録簿に読み込む関数
+
+    torchvision, timm, torchaudio, einops, Kornia, MONAI,
+    segmentation_models_pytorch が対象
 
     Parameters
     ----------
@@ -591,7 +677,7 @@ def load_library_units() -> None:
     ----------
     None
     """
-    # 名前で作るモデルを先に登録し, 同じ名前のクラスで上書きしない
+    # 名前で作るモデルを先に登録 (同じ名前のクラスでの上書きはなし)
     load_torchvision_models()
     load_timm_models()
     for item in CLASS_SOURCES:
