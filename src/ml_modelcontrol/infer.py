@@ -217,7 +217,13 @@ def infer(
         name for name, value in spec["inputs"].items()
         if not isinstance(value, dict) or value.get("shape") is None
     ]
-    if not analysis.ok or no_shape:
+    # 出力が無いことだけが誤りの場合は, 組み立ての途中でも形を確かめられる
+    # ようにノードごとに計算 (全体の ok は False のまま)
+    blocking = [
+        issue for issue in analysis.issues
+        if issue.severity == "error" and issue.code != "no_outputs"
+    ]
+    if blocking or no_shape:
         return result
     for name, value in spec["inputs"].items():
         count = 1
@@ -265,6 +271,8 @@ def infer(
             return result
         model.eval()
         run_nodes(model, spec, result)
+    if not analysis.ok:
+        result["ok"] = False
 
     return result
 
