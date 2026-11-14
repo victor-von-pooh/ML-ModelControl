@@ -173,6 +173,7 @@ def test_validate_reports_all_issues() -> None:
         "unit": "nn.MultiheadAttention",
         "params": {"embed_dim": 6, "num_heads": 2}, "inputs": "x"
     }
+    nodes["spare"] = {"unit": "nn.ReLU", "inputs": "x"}
     found = codes(spec)
     assert {
         "unknown_key", "unknown_param", "missing_param", "unknown_ref",
@@ -879,3 +880,60 @@ def test_export_name_warning() -> None:
     build_model(spec)
     with pytest.raises(ValueError, match="重なる"):
         export_python(spec)
+
+
+def test_validate_messages() -> None:
+    """
+    書き間違いの候補, 循環の先の注意, 誤りの先の注意の抑え方, 省略形を
+    確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 部品, 引数, つなぎ先の書き間違いに近い候補
+    spec = make_spec("""
+inputs:
+  x: {shape: [2, 8]}
+nodes:
+  fc: {unit: nn.Linaer, inputs: x}
+  fc2:
+    unit: nn.Linear
+    params: {in_features: 8, out_feature: 3}
+    inputs: x
+  add: {unit: op.Add, inputs: fc22}
+  a: {unit: nn.ReLU, inputs: b}
+  b: {unit: nn.ReLU, inputs: a}
+  c: {unit: nn.ReLU, inputs: b}
+outputs:
+  y: c
+""")
+    issues = {(item["code"], item["node"]): item for item in validate(spec)}
+    assert "nn.Linear" in issues[("unknown_unit", "fc")]["message"]
+    assert "out_features" in issues[("unknown_param", "fc2")]["message"]
+    assert "fc2" in issues[("unknown_ref", "add")]["message"]
+
+    # 循環に入るノードだけが誤りで, 循環の先は注意
+    assert ("cycle", "a") in issues and ("cycle", "b") in issues
+    assert ("after_cycle", "c") in issues
+    assert ("cycle", "c") not in issues
+
+    # 可変の数の口だけの部品は, つなぎ先の文字 1 つでも書ける
+    spec = make_spec("""
+inputs:
+  x: {shape: [2, 8]}
+nodes:
+  add: {unit: op.Add, inputs: x}
+outputs:
+  y: add
+""")
+    assert validate(spec) == []
+
+    # nodes がリストの場合は種類の誤り
+    spec = make_spec()
+    spec["nodes"] = [1, 2]
+    assert "invalid_nodes" in codes(spec)
