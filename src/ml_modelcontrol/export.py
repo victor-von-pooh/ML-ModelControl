@@ -7,7 +7,7 @@ from ml_modelcontrol.spec import load_spec, parse_ref
 from ml_modelcontrol.validate import analyze
 
 # 書き出すコードで変数の名前に使わない名前 (読み込むモジュールなど)
-RESERVED_VARS = {"self", "torch", "nn", "ops", "result"}
+RESERVED_VARS = {"self", "torch", "nn", "ops", "result", "pick"}
 
 
 def var_name(name: str) -> str:
@@ -29,23 +29,45 @@ def var_name(name: str) -> str:
     return var
 
 
-def path_code(path: list) -> str:
+def path_code(base: str, path: list, keyed: bool) -> str:
     """
-    出力の口の取り出し方を, 添字の式にする関数
+    出力の口の取り出し方を, 値を取り出す式にする関数
 
     Parameters
     ----------
+    base: str
+        部品の戻り値の変数
     path: list
         番号か名前の並び
+    keyed: bool
+        名前を常に辞書のキーとして取り出せる値か (Hugging Face の出力)
 
     Returns
     ----------
     code: str
-        [0][1] や ["last_hidden_state"] のような式
+        lstm[1][0], bert['last_hidden_state'], pick(stats['max'], 'indices')
+        のような式. 型の分からない値の名前は, 組み立てたモデルと同じく
+        辞書ならキー, それ以外は属性で取り出す pick を使う
     """
-    code = "".join(f"[{step!r}]" for step in path)
+    code = base
+    for step in path:
+        if isinstance(step, int) or keyed:
+            code += f"[{step!r}]"
+        else:
+            code = f"pick({code}, {step!r})"
 
     return code
+
+
+# 型の分からない値から名前で取り出す関数 (書き出すコードに必要な場合だけ置く)
+PICK_CODE = [
+    "def pick(value, name):",
+    "    # 辞書はキー (無いキーは None), それ以外は属性",
+    "    if isinstance(value, dict):",
+    "        return value.get(name)",
+    "    return getattr(value, name)",
+    "", ""
+]
 
 
 def export_python(
@@ -115,7 +137,11 @@ def export_python(
             build_args(spec, analysis, name), "),", "            "
         )
     lines.append("        })")
-    lines += forward_code(spec, analysis)
+    forward = forward_code(spec, analysis)
+    if any("pick(" in line for line in forward):
+        start = lines.index(f"class {class_name}(nn.Module):")
+        lines[start:start] = PICK_CODE
+    lines += forward
     code = "\n".join(lines) + "\n"
     if path is not None:
         Path(path).write_text(code, encoding="utf-8")
@@ -319,7 +345,10 @@ def ref_code(analysis: Any, ref: str) -> str:
         output = next(
             (item for item in outputs if item.name == port), outputs[0]
         )
-        code += path_code(output.path)
+        code = path_code(
+            code, output.path,
+            analysis.units[name].source == "transformers"
+        )
 
     return code
 

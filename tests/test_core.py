@@ -392,6 +392,79 @@ class SplitHalf(nn.Module):
         return halves
 
 
+# 辞書で値を返す自作の部品
+class Stats(nn.Module):
+    def forward(self, input: torch.Tensor) -> dict:
+        """
+        最後の次元の平均と, 最大値と位置を求める関数
+
+        Parameters
+        ----------
+        input: torch.Tensor
+            入力
+
+        Returns
+        ----------
+        stats: dict
+            mean (平均) と max (torch.max の結果. values と indices)
+        """
+        stats = {"mean": input.mean(dim=-1), "max": input.max(dim=-1)}
+
+        return stats
+
+
+def test_register_custom_output_paths() -> None:
+    """
+    自作の部品の出力の口を, キーと属性の並びで取り出せることを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # キーと, キーの後の属性で取り出す口
+    register_unit(
+        Stats, name="custom.Stats",
+        outputs={"mean": ["mean"], "argmax": ["max", "indices"]},
+        overwrite=True
+    )
+    spec = make_spec("""
+inputs:
+  x: {shape: [2, 3, 4]}
+nodes:
+  stats: {unit: custom.Stats, inputs: x}
+outputs:
+  mean: "stats:mean"
+  argmax: "stats:argmax"
+""")
+    assert validate(spec) == []
+    result = infer(spec)
+    assert result["outputs"]["mean"]["shape"] == [2, 3]
+    assert result["outputs"]["argmax"]["dtype"] == "int64"
+
+    # 書き出したコードも, 名前付きのタプルの属性を取り出して同じ値
+    code = export_python(spec)
+    assert "pick(pick(stats, 'max'), 'indices')" in code
+    namespace: dict = {}
+    exec(compile(code, "<exported>", "exec"), namespace)
+    x = torch.randn(2, 3, 4)
+    expected = build_model(spec)(x)
+    actual = namespace["Model"]()(x)
+    assert torch.equal(actual["argmax"], expected["argmax"])
+    assert torch.allclose(actual["mean"], expected["mean"])
+
+    # 取り出し方が番号と名前でない場合は登録できない
+    with pytest.raises(ValueError, match="取り出し方"):
+        register_unit(
+            Stats, name="custom.Bad", outputs={"x": [1.5]}, overwrite=True
+        )
+    with pytest.raises(ValueError, match="1 つ以上"):
+        register_unit(Stats, name="custom.Empty", outputs={})
+
+
 def test_register_custom_unit() -> None:
     """
     自作の部品を登録して, 出力の口ごとにつなげることを確かめる関数

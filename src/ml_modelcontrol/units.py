@@ -1,5 +1,5 @@
 import inspect
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 from torch import nn
 
@@ -405,9 +405,58 @@ def registered_names() -> list[str]:
     return names
 
 
+def output_ports(
+    outputs: Optional[Union[list[str], dict[str, list]]]
+) -> list[PortSpec]:
+    """
+    自作の部品の出力の口の指定から, 出力の口を作る関数
+
+    Parameters
+    ----------
+    outputs: Optional[Union[list[str], dict[str, list]]]
+        口の名前のリスト (戻り値のタプルの順), 口の名前ごとの取り出し方の
+        辞書, None なら out の 1 つ
+
+    Returns
+    ----------
+    ports: list[PortSpec]
+        出力の口
+
+    Raises
+    ----------
+    ValueError
+        口が無い場合と, 取り出し方が番号と名前の並びでない場合
+    """
+    # 指定が無い場合は戻り値そのもの, リストはタプルの要素の番号
+    if outputs is None:
+        return [PortSpec("out")]
+    if not isinstance(outputs, dict):
+        ports = [
+            PortSpec(port, path=[index]) for index, port in enumerate(outputs)
+        ]
+    else:
+        ports = []
+        for port, path in outputs.items():
+            steps = path if isinstance(path, (list, tuple)) else [path]
+            if not all(
+                isinstance(step, (int, str)) and not isinstance(step, bool)
+                for step in steps
+            ):
+                raise ValueError(
+                    f"出力の口 {port} の取り出し方は, 番号か名前の並びにして"
+                    f"ください (今は {path!r})"
+                )
+            ports.append(PortSpec(port, path=list(steps)))
+    if not ports:
+        raise ValueError("outputs に 1 つ以上の口を書いてください")
+
+    return ports
+
+
 def register_unit(
     cls: type, name: Optional[str] = None, description: str = "",
-    category: str = "custom", outputs: Optional[list[str]] = None,
+    category: str = "custom",
+    outputs: Optional[Union[list[str], dict[str, list]]] = None,
     notes: Optional[dict] = None, overwrite: bool = False
 ) -> UnitSpec:
     """
@@ -426,8 +475,11 @@ def register_unit(
         説明
     category: str = "custom"
         分類
-    outputs: Optional[list[str]] = None
-        タプルを返す場合の出力の口の名前 (戻り値の順), None なら out の 1 つ
+    outputs: Optional[Union[list[str], dict[str, list]]] = None
+        出力の口. リストはタプルを返す場合の口の名前 (戻り値の順), 辞書は
+        口の名前ごとの取り出し方 (番号か, 属性かキーの名前の並び. 例:
+        {"logits": ["logits"], "last": ["hidden_states", -1]}),
+        None なら out の 1 つ
     notes: Optional[dict] = None
         引数の説明と範囲 (params の名前ごとの description, minimum など)
     overwrite: bool = False
@@ -457,12 +509,7 @@ def register_unit(
     # 引数, 入力の口, 出力の口を決めて登録
     params, extra = params_from_init(cls)
     inputs, forward_params = ports_from_forward(cls)
-    ports = (
-        [PortSpec("out")] if outputs is None
-        else [
-            PortSpec(port, path=[index]) for index, port in enumerate(outputs)
-        ]
-    )
+    ports = output_ports(outputs)
     spec = UnitSpec(
         name=unit_name, category=category, source="custom",
         description=description, params=params, inputs=inputs, outputs=ports,
