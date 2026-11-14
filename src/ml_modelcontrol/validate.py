@@ -468,7 +468,17 @@ def check_node(
             f"部品 {unit.name} は使えません: {unit.reason}", node=name,
             location="unit"
         ))
+        return
     analysis.units[name] = unit
+
+    # Hugging Face のモデルの名前は, ネットワークを使わないので確かめない
+    if unit.source == "transformers":
+        issues.append(Issue(
+            "warning", "unchecked_model",
+            "Hugging Face のモデルの名前と設定は, 組み立てと形の推定のときに"
+            "読み込むまで確かめられません", node=name,
+            location="params.model_name"
+        ))
 
     # 引数, 呼び出すときの設定の値, 入力のつなぎ先の確認
     check_params(

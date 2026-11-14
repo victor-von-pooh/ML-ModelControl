@@ -1,5 +1,6 @@
 from importlib import metadata
 
+from ml_modelcontrol.export import export_python
 from ml_modelcontrol.infer import infer
 from ml_modelcontrol.model import GraphModel, SpecError, build_model
 from ml_modelcontrol.registry import describe_units, get_unit
@@ -15,6 +16,6 @@ except metadata.PackageNotFoundError:
 
 __all__ = [
     "GraphModel", "SpecError", "__version__", "build_model", "describe_units",
-    "dump_spec", "get_unit", "infer", "load_spec", "register_unit",
-    "validate"
+    "dump_spec", "export_python", "get_unit", "infer", "load_spec",
+    "register_unit", "validate"
 ]

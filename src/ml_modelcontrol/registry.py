@@ -70,6 +70,7 @@ class UnitSpec:
     # 書き出す Python のコードで, 作る式に使う名前 (nn.Linear など)
     code_name: str = ""
     code_import: str = ""
+    code_args: list = field(default_factory=list)
 
 
 # 名前から部品を引く登録簿
@@ -144,7 +145,7 @@ def describe_units() -> list[dict]:
     units = []
     for name in sorted(REGISTRY):
         data = asdict(REGISTRY[name])
-        for key in ("builder", "code_name", "code_import"):
+        for key in ("builder", "code_name", "code_import", "code_args"):
             data.pop(key)
         units.append(data)
 
@@ -295,7 +296,10 @@ def needs_module(cls: type) -> bool:
         text = str(annotation)
         if (
             inspect.isclass(annotation) and issubclass(annotation, nn.Module)
-        ) or "Module" in text or "Callable" in text:
+        ) or any(
+            word in text
+            for word in ("Module", "Callable", "MessagePassing", "Tensor")
+        ):
             needed = True
 
     return needed
@@ -349,8 +353,9 @@ def ports_from_forward(cls: type) -> tuple[list[PortSpec], list[ParamSpec]]:
     クラスの forward のシグネチャから入力の口と設定の値を取り出す関数
 
     既定値の無い引数は必須の口, 既定値が None の引数は省略できる口,
-    *args は可変の数の口 (xs) にする. 真偽値や数の既定値を持つ引数は,
-    口ではなく呼び出すときの設定の値にする
+    *args は可変の数の口 (xs) にする. 真偽値や数の既定値を持つ引数と,
+    既定値が None でもテンソル以外の型ヒントを持つ引数は, 口ではなく
+    呼び出すときの設定の値にする
 
     Parameters
     ----------
@@ -384,8 +389,17 @@ def ports_from_forward(cls: type) -> tuple[list[PortSpec], list[ParamSpec]]:
         positional = before_varargs or (
             parameter.kind is inspect.Parameter.POSITIONAL_ONLY
         )
-        flag = "bool" in str(parameter.annotation) and (
-            "Tensor" not in str(parameter.annotation)
+        # 既定値が None でも, 値の型ヒント (bool, int, list[int] など) を
+        # 持ちテンソルを含まない引数は設定の値
+        text = str(parameter.annotation)
+        flag = (
+            parameter.annotation is not inspect.Parameter.empty
+            and "Tensor" not in text
+            and any(
+                word in text
+                for word in ("bool", "int", "float", "str", "list", "tuple",
+                             "Tuple", "List")
+            )
         )
         if parameter.default is inspect.Parameter.empty:
             ports.append(PortSpec(name=name, positional=positional))
