@@ -4,6 +4,9 @@ from typing import Callable, Optional
 from torch import nn
 
 from ml_modelcontrol import ops
+from ml_modelcontrol.external import (
+    load_geometric_units, load_huggingface_units
+)
 from ml_modelcontrol.registry import (
     REGISTRY, ParamSpec, PortSpec, UnitSpec, apply_notes, needs_module,
     params_from_init, ports_from_forward, register
@@ -185,11 +188,13 @@ def load_builtin_units() -> None:
         return
     LOADED["done"] = True
 
-    # torch.nn の層と演算の登録
+    # torch.nn の層, 演算, 外部のライブラリの部品の登録
     for cls in torch_unit_classes():
         register_torch_unit(cls)
     for name, cls, description, variadic in OPS:
         register_op(name, cls, description, variadic)
+    load_geometric_units()
+    load_huggingface_units()
 
 
 def torch_unit_classes() -> list[type]:

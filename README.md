@@ -48,6 +48,10 @@ logits = model(x)                        # 入力は定義の順の位置か, �
 units = describe_units()                 # 部品の一覧 (引数と口の説明付き)
 ```
 
+PyTorch Geometric の層 (`pyg.GCNConv` など) と Hugging Face のモデル (`hf.AutoModel`, `hf.AutoModelForSequenceClassification`) は, それぞれのライブラリを入れると使える (無い場合は一覧に「使えない」と理由が出る). Hugging Face のモデルは `params` の `model_name` に名前かローカルのパスを書き, `pretrained: false` で重みを読まずに設定だけから作れる. 外部のコード (`trust_remote_code`) は使わない.
+
+`export_python("model.yaml")` で, 同じ計算をする `nn.Module` のクラスの Python のコードを書き出せる (`state_dict` のキーは `build_model` と同じ).
+
 自作の部品は `register_unit(MyBlock, name="my.Block")` で登録すると, 定義の `unit` に書ける (`forward` が複数の値を返す場合は `outputs=["a", "b"]` で口の名前を付ける).
 
 ## 開発
