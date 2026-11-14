@@ -843,7 +843,10 @@ nodes:
     unit: nn.Conv2d
     params: {in_channels: 3, out_channels: 4, kernel_size: 1, groups: 2}
     inputs: x
-  big: {unit: nn.Linear, params: {in_features: 8, out_features: 3000}, inputs: x}
+  big:
+    unit: nn.Linear
+    params: {in_features: 8, out_features: 3000}
+    inputs: x
 outputs:
   y: big
 """)
