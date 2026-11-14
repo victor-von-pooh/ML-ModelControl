@@ -447,7 +447,7 @@ outputs:
 
     # 書き出したコードも, 名前付きのタプルの属性を取り出して同じ値
     code = export_python(spec)
-    assert "pick(pick(stats, 'max'), 'indices')" in code
+    assert "_pick(_pick(stats, 'max'), 'indices')" in code
     namespace: dict = {}
     exec(compile(code, "<exported>", "exec"), namespace)
     x = torch.randn(2, 3, 4)
@@ -456,13 +456,17 @@ outputs:
     assert torch.equal(actual["argmax"], expected["argmax"])
     assert torch.allclose(actual["mean"], expected["mean"])
 
-    # 取り出し方が番号と名前でない場合は登録できない
+    # 取り出し方が番号と名前でない場合と, 口の名前が識別子でない場合の失敗
     with pytest.raises(ValueError, match="取り出し方"):
         register_unit(
             Stats, name="custom.Bad", outputs={"x": [1.5]}, overwrite=True
         )
     with pytest.raises(ValueError, match="1 つ以上"):
         register_unit(Stats, name="custom.Empty", outputs={})
+    with pytest.raises(ValueError, match="識別子"):
+        register_unit(
+            Stats, name="custom.BadPort", outputs={"a:b": ["mean"]}
+        )
 
 
 def test_register_custom_unit() -> None:

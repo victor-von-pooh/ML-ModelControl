@@ -7,7 +7,7 @@ from ml_modelcontrol.spec import load_spec, parse_ref
 from ml_modelcontrol.validate import analyze
 
 # 書き出すコードで変数の名前に使わない名前 (読み込むモジュールなど)
-RESERVED_VARS = {"self", "torch", "nn", "ops", "result", "pick"}
+RESERVED_VARS = {"self", "torch", "nn", "ops", "result", "_pick"}
 
 
 def var_name(name: str) -> str:
@@ -40,28 +40,32 @@ def path_code(base: str, path: list, keyed: bool) -> str:
     path: list
         番号か名前の並び
     keyed: bool
-        名前を常に辞書のキーとして取り出せる値か (Hugging Face の出力)
+        名前を常に辞書のキーとして取り出せる値か (Hugging Face の出力.
+        無いキーは None)
 
     Returns
     ----------
     code: str
-        lstm[1][0], bert['last_hidden_state'], pick(stats['max'], 'indices')
-        のような式. 型の分からない値の名前は, 組み立てたモデルと同じく
-        辞書ならキー, それ以外は属性で取り出す pick を使う
+        lstm[1][0], bert.get('pooler_output'),
+        _pick(_pick(stats, 'max'), 'indices') のような式. 型の分からない値の
+        名前は, 組み立てたモデルと同じく辞書ならキー, それ以外は属性で
+        取り出す _pick を使う
     """
     code = base
     for step in path:
-        if isinstance(step, int) or keyed:
+        if isinstance(step, int):
             code += f"[{step!r}]"
+        elif keyed:
+            code += f".get({step!r})"
         else:
-            code = f"pick({code}, {step!r})"
+            code = f"_pick({code}, {step!r})"
 
     return code
 
 
 # 型の分からない値から名前で取り出す関数 (書き出すコードに必要な場合だけ置く)
 PICK_CODE = [
-    "def pick(value, name):",
+    "def _pick(value, name):",
     "    # 辞書はキー (無いキーは None), それ以外は属性",
     "    if isinstance(value, dict):",
     "        return value.get(name)",
@@ -138,7 +142,7 @@ def export_python(
         )
     lines.append("        })")
     forward = forward_code(spec, analysis)
-    if any("pick(" in line for line in forward):
+    if any("_pick(" in line for line in forward):
         start = lines.index(f"class {class_name}(nn.Module):")
         lines[start:start] = PICK_CODE
     lines += forward
@@ -186,6 +190,11 @@ def check_names(spec: dict, analysis: Any, class_name: str) -> None:
                 f"同じ名前 {code_name} の別のクラスを読み込むので書き出せません"
             )
         imported.setdefault(code_name, unit.code_import)
+        if code_name in {"self", "result", "_pick"}:
+            raise ValueError(
+                f"部品 {unit.name} のクラスの名前 {code_name} は書き出すコード"
+                "で使う名前と重なるので書き出せません"
+            )
     reserved = RESERVED_VARS | set(imported)
     for name in [*spec["inputs"], *analysis.order]:
         if name in reserved:

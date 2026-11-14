@@ -437,6 +437,11 @@ def output_ports(
     else:
         ports = []
         for port, path in outputs.items():
+            if not isinstance(port, str) or not port.isidentifier():
+                raise ValueError(
+                    f"出力の口の名前 {port!r} は識別子 (英字か _ で始まる "
+                    "英数字と _) にしてください"
+                )
             steps = path if isinstance(path, (list, tuple)) else [path]
             if not all(
                 isinstance(step, (int, str)) and not isinstance(step, bool)
