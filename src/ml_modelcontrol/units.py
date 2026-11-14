@@ -150,6 +150,20 @@ TORCH_NOTES = {
     }
 }
 
+# 型ヒントでは選択肢が分からない, 文字の引数の選択肢 (クラス, 引数)
+PARAM_CHOICES = {
+    ("Transformer", "activation"): ["relu", "gelu"],
+    ("TransformerEncoderLayer", "activation"): ["relu", "gelu"],
+    ("TransformerDecoderLayer", "activation"): ["relu", "gelu"],
+    ("EmbeddingBag", "mode"): ["sum", "mean", "max"],
+    ("GELU", "approximate"): ["none", "tanh"],
+    ("RNNCell", "nonlinearity"): ["tanh", "relu"],
+    ("Upsample", "mode"): [
+        "nearest", "nearest-exact", "linear", "bilinear", "bicubic",
+        "trilinear"
+    ]
+}
+
 # 演算の部品 (名前, クラス, 説明, 入力が可変の数か)
 OPS = [
     ("Add", ops.Add, "全ての入力を足し合わせる (残差のつなぎ方など)", True),
@@ -315,6 +329,11 @@ def register_torch_unit(cls: type) -> UnitSpec:
         code_name=f"nn.{cls.__name__}", code_import="from torch import nn"
     )
     apply_notes(spec, TORCH_NOTES.get(cls.__name__, {}))
+    for param in spec.params:
+        choices = PARAM_CHOICES.get((cls.__name__, param.name))
+        if choices is not None:
+            param.kind = "str"
+            param.choices = list(choices)
 
     # 別の部品を引数に取るクラス (TransformerEncoder など) は今は対象外
     if needs_module(cls):
