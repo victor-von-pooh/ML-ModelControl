@@ -31,6 +31,12 @@ CASES = [
      [2, 32, 9]),
     ("einops", "einops.Rearrange", {"pattern": "b c h w -> b (h w) c"},
      "input", [2, 3, 4, 4], [2, 16, 3]),
+    ("einops", "einops.Rearrange",
+     {"pattern": "b c (h p) (w q) -> b (h w) (p q c)", "p": 2, "q": 2},
+     "input", [2, 3, 4, 4], [2, 4, 12]),
+    ("einops", "einops.Reduce",
+     {"pattern": "b c h w -> b c", "reduction": "max"}, "input",
+     [2, 3, 4, 4], [2, 3]),
     ("kornia", "kornia.Normalize",
      {"mean": [0.5, 0.5, 0.5], "std": [0.2, 0.2, 0.2]}, "input",
      [2, 3, 8, 8], [2, 3, 8, 8]),
@@ -85,7 +91,7 @@ outputs:
 
 @pytest.mark.parametrize(
     ("package", "unit", "params", "port", "shape", "expected"), CASES,
-    ids=[case[1] for case in CASES]
+    ids=[f"{case[1]}-{index}" for index, case in enumerate(CASES)]
 )
 def test_library_units(
     package: str, unit: str, params: dict, port: str, shape: list,
