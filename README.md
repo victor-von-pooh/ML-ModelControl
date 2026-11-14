@@ -97,22 +97,27 @@ spec_path = PROJECT_DIR / cfg.model.spec
 model = build_model(spec_path, seed=cfg.experiment.seed)
 shutil.copy(spec_path, experiment.run_dir / "model_spec.yaml")
 
+# step とデータ (train_loader, valid_loader) は, ML-Found の README の
+# 「学習スクリプト」と同じくプロジェクトで用意する
 trainer = Trainer(model, experiment, step)
 history = trainer.fit(train_loader, valid_loader)
 ```
 
+`experiment.run_dir` は実験の出力先 (`Path`. プロジェクトのディレクトリの `outputs/<experiment.name>/<日付>/<時刻>/`). 後から読み込む場合は, その中の定義と重みを使う.
+
 ```python
-# 後から読み込む
+# 後から読み込む (パスはプロジェクトのディレクトリから)
 import torch
 
-model = build_model("outputs/.../model_spec.yaml")
-model.load_state_dict(torch.load("outputs/.../final_model.pt"))
+run_dir = "outputs/iris/2026-11-15/01-14-54"
+model = build_model(f"{run_dir}/model_spec.yaml")
+model.load_state_dict(torch.load(f"{run_dir}/final_model.pt"))
 ```
 
-- 出力が 1 つの定義のモデルはテンソルを返し, 複数の場合は出力の名前の辞書を返すので, `step` ではそれに合わせて受け取る
+- 出力が 1 つの定義のモデルはテンソルを返し, 複数の場合は出力の名前の辞書を返す. `step` では `logits = model(x)` か, 複数なら `logits = model(x)["logits"]` のように受け取る
 - 入力は定義の `inputs` の順の位置か, 名前のキーワードで渡す
 - ML-CreateArchitecture で保存した定義 (YAML) もそのまま使える
-- 学習済みの重みを読む部品 (`pretrained: true` など) は, `build_model` のときに重みを取得する
+- 学習済みの重みを読む部品 (`pretrained: true` など) は, `build_model` のときに重みを取得する (後から読み込むときも, 取得してから `final_model.pt` の重みで上書きする. ネットワークと時間が要る)
 
 ## 開発
 
