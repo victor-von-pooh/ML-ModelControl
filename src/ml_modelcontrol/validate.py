@@ -379,6 +379,19 @@ def check_params(
                 location=location
             ))
             continue
+        # 一覧に無い引数は, Python のキーワード引数として書ける名前だけ
+        # (書き出すコードの呼び出しで使うため)
+        if key not in by_name and (
+            not isinstance(key, str) or not key.isidentifier()
+            or keyword.iskeyword(key)
+        ):
+            issues.append(Issue(
+                "error", "invalid_param_name",
+                f"引数の名前 {key!r} は, 英字か _ で始まる英数字と _ で, "
+                "Python の予約語 (class など) 以外にしてください",
+                node=name, location=location
+            ))
+            continue
         if not is_json_value(value):
             issues.append(Issue(
                 "error", "invalid_value",
