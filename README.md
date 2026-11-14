@@ -98,11 +98,13 @@ from ml_modelcontrol import build_model
 PROJECT_DIR = Path(__file__).resolve().parent
 
 cfg, diff = load_project_config(str(PROJECT_DIR))
-experiment = start_experiment(cfg, diff, str(PROJECT_DIR))
 
-# 定義から組み立て, 定義を実験の出力先に残す
+# 定義から組み立て (誤りがあれば, 実験の出力先を作る前に SpecError で止まる)
 spec_path = PROJECT_DIR / cfg.model.spec
 model = build_model(spec_path, seed=cfg.experiment.seed)
+
+# 実験を始め, 定義を実験の出力先に残す
+experiment = start_experiment(cfg, diff, str(PROJECT_DIR))
 shutil.copy(spec_path, experiment.run_dir / "model_spec.yaml")
 
 # step とデータ (train_loader, valid_loader) は, ML-Found の README の
