@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, Optional, Union
 
 import torch
@@ -6,7 +7,7 @@ from torch import nn
 
 from ml_modelcontrol.model import GraphModel, follow_path
 from ml_modelcontrol.spec import load_spec
-from ml_modelcontrol.validate import analyze
+from ml_modelcontrol.validate import Analysis, Issue, analyze
 
 # 形の推定で計算する前に確かめる, パラメータ数の上限の既定値
 MAX_PARAMS = 200_000_000
@@ -117,7 +118,7 @@ def count_params(
     return total, trainable
 
 
-def estimate_params(spec: dict, analysis: Any) -> Optional[int]:
+def estimate_params(spec: dict, analysis: Analysis) -> Optional[int]:
     """
     重みの値を作らずに (meta デバイスで), モデルのパラメータ数を数える関数
 
@@ -125,7 +126,7 @@ def estimate_params(spec: dict, analysis: Any) -> Optional[int]:
     ----------
     spec: dict
         モデルの定義
-    analysis: Any
+    analysis: Analysis
         定義の解析の結果
 
     Returns
@@ -133,7 +134,7 @@ def estimate_params(spec: dict, analysis: Any) -> Optional[int]:
     total: Optional[int]
         パラメータ数, meta デバイスで作れない部品がある場合は None
     """
-    # 作れない部品がある場合は数えずに返す
+    # 作れない部品がある場合は数えずに終了
     try:
         with torch.device("meta"):
             model = GraphModel(spec, analysis)
@@ -145,7 +146,7 @@ def estimate_params(spec: dict, analysis: Any) -> Optional[int]:
 
 
 def infer(
-    spec: Union[str, dict], max_params: int = MAX_PARAMS
+    spec: Union[str, Path, dict], max_params: int = MAX_PARAMS
 ) -> dict:
     """
     入力の例をモデルに通し, ノードごとの出力の形とパラメータ数を求める関数
@@ -155,7 +156,7 @@ def infer(
 
     Parameters
     ----------
-    spec: Union[str, dict]
+    spec: Union[str, Path, dict]
         モデルの定義, またはその YAML か JSON のファイルのパス
     max_params: int = MAX_PARAMS
         計算する前に確かめるパラメータ数の上限. 超える場合は計算しない
@@ -168,7 +169,7 @@ def infer(
         形), params, trainable (全体), estimated_only (上限を超えて計算
         しなかったか)
     """
-    # 定義の誤りがある場合は計算しない
+    # 定義の誤りがある場合と, 形の無い入力がある場合は計算なし
     spec = load_spec(spec)
     analysis = analyze(spec)
     result: dict = {
@@ -176,22 +177,32 @@ def infer(
         "nodes": {}, "outputs": {}, "params": None, "trainable": None,
         "estimated_only": False
     }
-    if not analysis.ok:
+    no_shape = [
+        name for name, value in spec["inputs"].items()
+        if not isinstance(value, dict) or value.get("shape") is None
+    ]
+    if not analysis.ok or no_shape:
         return result
 
-    # 先にパラメータ数を数え, 上限を超える場合は計算しない
+    # 先にパラメータ数を数え, 上限を超える場合は計算なし
+    # 数えられない場合 (meta デバイスで作れない部品) は注意を加えて計算
     estimate = estimate_params(spec, analysis)
     if estimate is not None and estimate > max_params:
         result["params"] = estimate
         result["estimated_only"] = True
         return result
+    if estimate is None:
+        result["issues"].append(vars(Issue(
+            "warning", "no_estimate",
+            "パラメータ数を前もって数えられないので, 上限を確かめずに計算します"
+        )))
 
     # cpu で組み立て, 入力の例をノードごとに計算
-    with torch.random.fork_rng(devices=[]):
+    with torch.device("cpu"), torch.random.fork_rng(devices=[]):
         torch.manual_seed(0)
         model = GraphModel(spec, analysis)
-    model.eval()
-    run_nodes(model, spec, result)
+        model.eval()
+        run_nodes(model, spec, result)
 
     return result
 
@@ -230,7 +241,7 @@ def run_nodes(model: GraphModel, spec: dict, result: dict) -> None:
             }
             result["nodes"][name] = entry
 
-            # 前のノードが失敗した場合は計算しない
+            # 前のノードが失敗した場合は計算なし
             upstream = [
                 target for targets in model.connections[name].values()
                 for target, _ in targets if target in failed
@@ -255,15 +266,20 @@ def run_nodes(model: GraphModel, spec: dict, result: dict) -> None:
     result["params"] = total
     result["trainable"] = trainable
 
-    # モデルの出力の形 (計算できた場合)
+    # モデルの出力の形 (取り出せない場合はエラー)
+    output_errors = False
     for name, ref in spec["outputs"].items():
         target = ref.partition(":")[0]
         if target in failed:
+            output_errors = True
             continue
         try:
             result["outputs"][str(name)] = describe(model.resolve(
                 values, (target, ref.partition(":")[2] or None)
             ))
         except Exception as error:
-            failed[str(name)] = f"{type(error).__name__}: {error}"
-    result["ok"] = not failed
+            output_errors = True
+            result["outputs"][str(name)] = {
+                "kind": "error", "error": f"{type(error).__name__}: {error}"
+            }
+    result["ok"] = not failed and not output_errors

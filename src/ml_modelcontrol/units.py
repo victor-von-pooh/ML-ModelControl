@@ -5,14 +5,15 @@ from torch import nn
 
 from ml_modelcontrol import ops
 from ml_modelcontrol.registry import (
-    REGISTRY, ParamSpec, PortSpec, UnitSpec, apply_notes, params_from_init,
-    ports_from_forward, register
+    REGISTRY, ParamSpec, PortSpec, UnitSpec, apply_notes, needs_module,
+    params_from_init, ports_from_forward, register
 )
 
 # 部品にしない torch.nn のクラス (入れ物と, 他の部品の土台のクラス)
 EXCLUDED_TORCH = {
     "Module", "Sequential", "ModuleList", "ModuleDict", "ParameterList",
-    "ParameterDict", "Container", "RNNBase", "RNNCellBase"
+    "ParameterDict", "Container", "RNNBase", "RNNCellBase", "DataParallel",
+    "AdaptiveLogSoftmaxWithLoss"
 }
 
 # RNN の系統の引数 (*args で受け取るので, シグネチャから取り出せない)
@@ -179,7 +180,7 @@ def load_builtin_units() -> None:
     ----------
     None
     """
-    # 2 回目以降は何もしない
+    # 2 回目以降は処理なし
     if LOADED["done"]:
         return
     LOADED["done"] = True
@@ -274,11 +275,21 @@ def register_torch_unit(cls: type) -> UnitSpec:
     category = cls.__module__.rsplit(".", 1)[-1]
     outputs = [PortSpec("out")]
 
-    # RNN の系統は引数と出力を手で指定
+    # RNN の系統は引数と出力を手で指定 (RNN は活性化関数, LSTM は射影も)
     if cls.__name__ in ("RNN", "LSTM", "GRU"):
         params, extra = [
             ParamSpec(**vars(param)) for param in RNN_PARAMS
         ], False
+        if cls.__name__ == "RNN":
+            params.append(ParamSpec(
+                "nonlinearity", "str", "tanh", description="活性化関数",
+                choices=["tanh", "relu"]
+            ))
+        if cls.__name__ == "LSTM":
+            params.append(ParamSpec(
+                "proj_size", "int", 0,
+                description="出力の射影の大きさ (0 なら射影しない)", minimum=0
+            ))
         source = LSTM_OUTPUTS if cls.__name__ == "LSTM" else RNN_OUTPUTS
         outputs = [PortSpec(**vars(port)) for port in source]
     if cls.__name__ == "MultiheadAttention":
@@ -297,6 +308,13 @@ def register_torch_unit(cls: type) -> UnitSpec:
         code_name=f"nn.{cls.__name__}", code_import="from torch import nn"
     )
     apply_notes(spec, TORCH_NOTES.get(cls.__name__, {}))
+
+    # 別の部品を引数に取るクラス (TransformerEncoder など) は今は対象外
+    if needs_module(cls):
+        spec.available = False
+        spec.reason = (
+            "引数に別の部品 (nn.Module) が必要なので, 今は定義から作れません"
+        )
     register(spec)
 
     return spec
@@ -324,7 +342,7 @@ def register_op(
     spec: UnitSpec
         登録した部品
     """
-    # 可変の数の入力は inputs, それ以外は input の口
+    # 可変の数の入力は xs, それ以外は input の口
     params, _ = params_from_init(cls)
     inputs = (
         [PortSpec("xs", "つなぐ値 (書いた順)", variadic=True)]
@@ -364,7 +382,7 @@ def registered_names() -> list[str]:
 def register_unit(
     cls: type, name: Optional[str] = None, description: str = "",
     category: str = "custom", outputs: Optional[list[str]] = None,
-    notes: Optional[dict] = None
+    notes: Optional[dict] = None, overwrite: bool = False
 ) -> UnitSpec:
     """
     自作の nn.Module のクラスを部品として登録する関数
@@ -386,6 +404,8 @@ def register_unit(
         タプルを返す場合の出力の口の名前 (戻り値の順), None なら out の 1 つ
     notes: Optional[dict] = None
         引数の説明と範囲 (params の名前ごとの description, minimum など)
+    overwrite: bool = False
+        同じ名前の自作の部品を上書きするか (組み込みの部品は上書き不可)
 
     Returns
     ----------
@@ -397,6 +417,17 @@ def register_unit(
         raise TypeError(f"{cls!r} は nn.Module のクラスではありません")
     load_builtin_units()
 
+    # 組み込みの部品と, 上書きしない場合の同じ名前の自作の部品は不可
+    unit_name = name or cls.__name__
+    existing = REGISTRY.get(unit_name)
+    if existing is not None and (
+        existing.source != "custom" or not overwrite
+    ):
+        raise ValueError(
+            f"部品 {unit_name} は登録済みです (自作の部品は overwrite=True で"
+            "上書き可)"
+        )
+
     # 引数, 入力の口, 出力の口を決めて登録
     params, extra = params_from_init(cls)
     inputs, forward_params = ports_from_forward(cls)
@@ -407,7 +438,7 @@ def register_unit(
         ]
     )
     spec = UnitSpec(
-        name=name or cls.__name__, category=category, source="custom",
+        name=unit_name, category=category, source="custom",
         description=description, params=params, inputs=inputs, outputs=ports,
         forward_params=forward_params, extra_params=extra,
         builder=make_builder(cls), code_name=cls.__name__,

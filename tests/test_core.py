@@ -91,7 +91,7 @@ def test_registry_lists_units() -> None:
     ----------
     None
     """
-    # 一覧は JSON にでき, 入れ物, 損失関数, 遅延初期化の層は含まない
+    # 一覧は JSON にでき, 入れ物, 損失関数, 遅延初期化の層は対象外
     units = describe_units()
     json.dumps(units)
     names = {unit["name"] for unit in units}
@@ -126,7 +126,7 @@ def test_spec_round_trip(tmp_path: Path) -> None:
     ----------
     None
     """
-    # 保存して読み戻すと同じ定義 (ノードの順と ui も残る)
+    # 保存して読み戻すと同じ定義 (ノードの順と ui も保持)
     spec = make_spec()
     for suffix in (".yaml", ".json"):
         path = tmp_path / f"model{suffix}"
@@ -137,7 +137,7 @@ def test_spec_round_trip(tmp_path: Path) -> None:
     text = dump_spec(spec)
     assert text.index("format_version") < text.index("nodes")
 
-    # ライブラリより新しい版は読めない
+    # ライブラリより新しい版は読み込み不可
     spec["format_version"] = 99
     with pytest.raises(ValueError, match="format_version 99"):
         load_spec(spec)
@@ -180,7 +180,7 @@ def test_validate_reports_all_issues() -> None:
         "ambiguous_inputs", "unused_node"
     } <= found
 
-    # 誤りにはノードの名前と場所が付く
+    # 誤りにノードの名前と場所
     issues = validate(spec)
     value = next(issue for issue in issues if issue["node"] == "drop")
     assert value["location"] == "params.p"
@@ -236,7 +236,7 @@ def test_build_model_matches_manual() -> None:
         model.state_dict()
     )]
 
-    # 手で同じ計算をした結果と一致, 入力は位置でも名前でも渡せる
+    # 手で同じ計算をした結果と一致 (入力は位置でも名前でも可)
     x = torch.randn(3, 5, 6)
     out = model(x)
     nodes = model.nodes
@@ -266,7 +266,7 @@ def test_forward_params_and_optional_ports() -> None:
     ----------
     None
     """
-    # 注意機構で key_padding_mask を省略し attn_mask をつなぎ, 重みを返さない
+    # 注意機構で key_padding_mask を省略し attn_mask をつなぎ, 重みは返さない設定
     spec = make_spec("""
 inputs:
   q: {shape: [2, 4, 6]}
@@ -308,7 +308,7 @@ def test_infer_shapes_errors_and_params() -> None:
     lstm = 4 * (6 * 4 + 4 * 4 + 4 + 4)
     assert result["params"] == 42 + lstm + 10
 
-    # 形の合わない層は失敗し, その先は計算しない
+    # 形の合わない層は失敗し, その先は計算なし
     spec = make_spec()
     spec["nodes"]["lstm"]["params"]["input_size"] = 7
     result = infer(spec)
@@ -424,3 +424,95 @@ outputs:
     assert torch.equal(out, x[:, :3] + x[:, 3:])
     with pytest.raises(TypeError):
         register_unit(int)
+
+
+# *args の後ろとキーワードだけの口を持つ自作の部品
+class ScaledSum(nn.Module):
+    def __init__(self):
+        # 親クラスのコンストラクタを呼び出す
+        super(ScaledSum, self).__init__()
+
+    def forward(
+        self, *xs: torch.Tensor, scale: torch.Tensor = None
+    ) -> torch.Tensor:
+        """
+        全ての入力の和に, 決めた値を掛ける関数
+
+        Parameters
+        ----------
+        *xs: torch.Tensor
+            足し合わせるテンソル
+        scale: torch.Tensor = None
+            掛ける値, None の場合は掛けない
+
+        Returns
+        ----------
+        total: torch.Tensor
+            入力の和 (scale がある場合は掛けた値)
+        """
+        # 和を求めて掛け算
+        total = sum(xs)
+        if scale is not None:
+            total = total * scale
+
+        return total
+
+
+def test_review_fixes(tmp_path: Path) -> None:
+    """
+    引数の種類, 口の渡し方, 必須の null, YAML の数, 定義のファイルの確認,
+    組み込みの部品の上書き, 形の無い入力を確かめる関数
+
+    Parameters
+    ----------
+    tmp_path: Path
+        pytest が用意する一時ディレクトリ
+
+    Returns
+    ----------
+    None
+    """
+    # Conv の padding の same と組の stride, 1e-5 の書き方の eps
+    path = tmp_path / "conv.yaml"
+    path.write_text(
+        "inputs:\n  x: {shape: [2, 1, 5, 5]}\n"
+        "nodes:\n  conv:\n    unit: nn.Conv2d\n"
+        "    params: {in_channels: 1, out_channels: 2, kernel_size: [3, 3],"
+        " padding: same, stride: [1, 1]}\n    inputs: x\n"
+        "  norm:\n    unit: nn.BatchNorm2d\n"
+        "    params: {num_features: 2, eps: 1e-5}\n    inputs: conv\n"
+        "outputs:\n  y: norm\n", encoding="utf-8"
+    )
+    assert validate(path) == []
+    assert infer(path)["outputs"]["y"]["shape"] == [2, 2, 5, 5]
+
+    # *args の後ろの口はキーワードで受け渡し
+    register_unit(ScaledSum, name="custom.ScaledSum", overwrite=True)
+    spec = make_spec("""
+inputs:
+  x: {shape: [2, 3]}
+  s: {shape: [2, 3], fill: ones}
+nodes:
+  sum: {unit: custom.ScaledSum, inputs: {xs: [x, x], scale: s}}
+outputs:
+  y: sum
+""")
+    x = torch.randn(2, 3)
+    assert torch.allclose(build_model(spec)(x, x * 0 + 2), x * 4)
+
+    # 必須の引数の null, 新しい版, 組み込みの部品の上書き
+    spec = make_spec()
+    spec["nodes"]["fc1"]["params"]["in_features"] = None
+    assert "missing_param" in codes(spec)
+    spec["format_version"] = 99
+    assert validate(spec)[0]["code"] == "invalid_spec"
+    with pytest.raises(ValueError, match="登録済み"):
+        register_unit(ScaledSum, name="nn.Linear")
+
+    # 形の無い入力がある場合は計算なし
+    spec = make_spec()
+    spec["inputs"]["x"].pop("shape")
+    result = infer(spec)
+    assert not result["ok"]
+    assert result["nodes"] == {}
+    assert "no_shape" in {issue["code"] for issue in result["issues"]}

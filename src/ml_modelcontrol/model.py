@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any, Optional, Union
 
 import torch
@@ -9,11 +10,13 @@ from ml_modelcontrol.validate import Analysis, analyze
 
 class SpecError(ValueError):
     def __init__(self, issues: list[dict]):
-        # 誤りの一覧を説明の文にまとめて親クラスに渡す
+        # 誤りの一覧の説明の文への変換
         errors = [issue for issue in issues if issue["severity"] == "error"]
         lines = [
             f"{issue['node'] or '定義'}: {issue['message']}" for issue in errors
         ]
+
+        # 親クラスのコンストラクタを呼び出す
         super(SpecError, self).__init__(
             "モデルの定義に誤りがあります:\n" + "\n".join(lines)
         )
@@ -131,7 +134,7 @@ class GraphModel(nn.Module):
         values: dict[str, Any]
             入力の名前ごとの値
         """
-        # 位置で渡した値を順に対応させ, 名前で渡した値を重ねる
+        # 位置で渡した値の対応付けと, 名前で渡した値の追加
         if len(args) > len(self.input_names):
             raise TypeError(
                 f"入力は {len(self.input_names)} 個ですが, {len(args)} 個の値が"
@@ -180,8 +183,8 @@ class GraphModel(nn.Module):
         """
         1 つのノードを計算する関数
 
-        口の順に, 省略した口の手前までを位置で渡し, それより後ろは
-        キーワードで渡す. 可変の数の口は位置で並べる
+        *args より前の口と位置だけの口は位置で, 可変の数の口は位置で並べ,
+        それ以外の口と呼び出すときの設定の値はキーワードで渡す
 
         Parameters
         ----------
@@ -196,23 +199,21 @@ class GraphModel(nn.Module):
             部品の戻り値
         """
         # 口ごとのつなぎ先の値を集めて呼び出し
+        # 位置で渡す口 (*args より前) は省略しても None を置き, 可変の数の口は
+        # 位置で並べ, それ以外はキーワードで受け渡し
         connections = self.connections[name]
         args: list[Any] = []
         kwargs: dict[str, Any] = dict(self.forward_params[name])
-        positional = True
         for port in self.ports[name]:
-            if port.name not in connections:
-                positional = False
-                continue
             items = [
                 self.resolve(values, target)
-                for target in connections[port.name]
+                for target in connections.get(port.name, [])
             ]
             if port.variadic:
                 args.extend(items)
-            elif positional:
-                args.append(items[0])
-            else:
+            elif port.positional:
+                args.append(items[0] if items else None)
+            elif items:
                 kwargs[port.name] = items[0]
         output = self.nodes[name](*args, **kwargs)
 
@@ -251,14 +252,14 @@ class GraphModel(nn.Module):
 
 
 def build_model(
-    spec: Union[str, dict], seed: Optional[int] = None
+    spec: Union[str, Path, dict], seed: Optional[int] = None
 ) -> GraphModel:
     """
     モデルの定義から nn.Module を組み立てる関数
 
     Parameters
     ----------
-    spec: Union[str, dict]
+    spec: Union[str, Path, dict]
         モデルの定義, またはその YAML か JSON のファイルのパス
     seed: Optional[int] = None
         重みの初期値の乱数の種, None の場合は今の乱数の状態のまま

@@ -1,7 +1,7 @@
 import inspect
 import math
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Literal, Optional, get_args, get_origin
 
 from torch import nn
 
@@ -38,6 +38,9 @@ class PortSpec:
 
     # 出力の口の取り出し方 (番号か属性の名前の並び, 空なら戻り値そのもの)
     path: list = field(default_factory=list)
+
+    # 位置で渡す必要がある入力の口か (*args より前の口と, 位置だけの引数)
+    positional: bool = False
 
 
 @dataclass
@@ -112,7 +115,7 @@ def get_unit(name: str) -> UnitSpec:
     KeyError
         登録されていない名前の場合
     """
-    # 組み込みの部品を読み込んでから引く
+    # 組み込みの部品を読み込んでから検索
     ensure_loaded()
     if name not in REGISTRY:
         raise KeyError(f"部品 {name} は登録されていません")
@@ -203,6 +206,9 @@ def kind_of(annotation: Any, default: Any) -> str:
     """
     型ヒントと既定値から, 引数の種類を決める関数
 
+    型ヒントがある場合はそれを優先し (int と組の両方を受け取る kernel_size
+    などは any), 無い場合は既定値の型から決める
+
     Parameters
     ----------
     annotation: Any
@@ -215,7 +221,20 @@ def kind_of(annotation: Any, default: Any) -> str:
     kind: str
         int, float, bool, str, list, any のどれか
     """
-    # 既定値の型を優先し, 無ければ型ヒントの文字から判定
+    # 型ヒントが単純な型ならその種類, 選択肢なら str, それ以外は any
+    simple = {bool: "bool", int: "int", float: "float", str: "str"}
+    if annotation is not inspect.Parameter.empty:
+        if annotation in simple:
+            kind = simple[annotation]
+        elif get_origin(annotation) is Literal and all(
+            isinstance(value, str) for value in get_args(annotation)
+        ):
+            kind = "str"
+        else:
+            kind = "any"
+        return kind
+
+    # 型ヒントが無い場合は既定値の型
     if isinstance(default, bool):
         kind = "bool"
     elif isinstance(default, int):
@@ -225,17 +244,61 @@ def kind_of(annotation: Any, default: Any) -> str:
     elif isinstance(default, str):
         kind = "str"
     else:
-        text = "" if annotation is inspect.Parameter.empty else str(
-            getattr(annotation, "__name__", annotation)
-        )
         kind = "any"
-        for name in ("bool", "int", "float", "str"):
-            if text == name:
-                kind = name
-        if text.startswith(("tuple", "list", "Union[int, tuple")):
-            kind = "list" if text.startswith(("tuple", "list")) else "any"
 
     return kind
+
+
+def choices_of(annotation: Any) -> Optional[list]:
+    """
+    型ヒントが選択肢 (Literal) の場合に, その値を返す関数
+
+    Parameters
+    ----------
+    annotation: Any
+        型ヒント
+
+    Returns
+    ----------
+    choices: Optional[list]
+        選択肢, 選択肢でない場合は None
+    """
+    choices = None
+    if get_origin(annotation) is Literal:
+        choices = list(get_args(annotation))
+
+    return choices
+
+
+def needs_module(cls: type) -> bool:
+    """
+    __init__ の引数に別の部品 (nn.Module や関数) が必要なクラスかを返す関数
+
+    Parameters
+    ----------
+    cls: type
+        nn.Module のクラス
+
+    Returns
+    ----------
+    needed: bool
+        必須の引数の型ヒントが nn.Module か Callable なら True
+    """
+    # 既定値の無い引数の型ヒントを確認
+    needed = False
+    for parameter in inspect.signature(cls.__init__).parameters.values():
+        if parameter.default is not inspect.Parameter.empty:
+            continue
+        annotation = parameter.annotation
+        if isinstance(annotation, str):
+            annotation = getattr(nn, annotation, annotation)
+        text = str(annotation)
+        if (
+            inspect.isclass(annotation) and issubclass(annotation, nn.Module)
+        ) or "Module" in text or "Callable" in text:
+            needed = True
+
+    return needed
 
 
 def params_from_init(cls: type) -> tuple[list[ParamSpec], bool]:
@@ -254,9 +317,13 @@ def params_from_init(cls: type) -> tuple[list[ParamSpec], bool]:
     extra: bool
         **kwargs を持つかどうか
     """
-    # シグネチャの引数を順に変換
-    params = []
+    # nn.Module の __init__ をそのまま使うクラスは引数なし
+    params: list[ParamSpec] = []
     extra = False
+    if cls.__init__ is nn.Module.__init__:
+        return params, extra
+
+    # シグネチャの引数を順に変換
     signature = inspect.signature(cls.__init__)
     for name, parameter in signature.parameters.items():
         if parameter.kind is inspect.Parameter.VAR_KEYWORD:
@@ -270,7 +337,8 @@ def params_from_init(cls: type) -> tuple[list[ParamSpec], bool]:
         default = None if required else parameter.default
         params.append(ParamSpec(
             name=name, kind=kind_of(parameter.annotation, parameter.default),
-            default=to_plain(default), required=required
+            default=to_plain(default), required=required,
+            choices=choices_of(parameter.annotation)
         ))
 
     return params, extra
@@ -297,19 +365,34 @@ def ports_from_forward(cls: type) -> tuple[list[PortSpec], list[ParamSpec]]:
         呼び出すときの設定の値
     """
     # シグネチャの引数を順に変換
+    # *args より前の口と位置だけの引数は位置で, それ以外はキーワードで受け渡し
     ports = []
     forward_params = []
-    signature = inspect.signature(cls.forward)
-    for name, parameter in signature.parameters.items():
+    parameters = inspect.signature(cls.forward).parameters
+    has_varargs = any(
+        parameter.kind is inspect.Parameter.VAR_POSITIONAL
+        for parameter in parameters.values()
+    )
+    before_varargs = has_varargs
+    for name, parameter in parameters.items():
         if name == "self" or parameter.kind is inspect.Parameter.VAR_KEYWORD:
             continue
         if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
             ports.append(PortSpec(name="xs", variadic=True))
+            before_varargs = False
             continue
+        positional = before_varargs or (
+            parameter.kind is inspect.Parameter.POSITIONAL_ONLY
+        )
+        flag = "bool" in str(parameter.annotation) and (
+            "Tensor" not in str(parameter.annotation)
+        )
         if parameter.default is inspect.Parameter.empty:
-            ports.append(PortSpec(name=name))
-        elif parameter.default in PORT_DEFAULTS:
-            ports.append(PortSpec(name=name, optional=True))
+            ports.append(PortSpec(name=name, positional=positional))
+        elif parameter.default in PORT_DEFAULTS and not flag:
+            ports.append(PortSpec(
+                name=name, optional=True, positional=positional
+            ))
         else:
             forward_params.append(ParamSpec(
                 name=name,

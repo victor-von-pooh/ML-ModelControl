@@ -1,13 +1,15 @@
 import keyword
+import math
 import re
 from dataclasses import asdict, dataclass, field
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any, Optional, Union
 
 from torch import nn
 
 from ml_modelcontrol.registry import ParamSpec, UnitSpec, get_unit
 from ml_modelcontrol.spec import (
-    GRAPH_KEYS, INPUT_KEYS, NODE_KEYS, node_inputs, parse_ref
+    GRAPH_KEYS, INPUT_KEYS, NODE_KEYS, load_spec, node_inputs, parse_ref
 )
 
 # 入力, ノード, 出力の名前の形
@@ -63,7 +65,7 @@ class Analysis:
         return ok
 
 
-def validate(spec: dict) -> list[dict]:
+def validate(spec: Union[str, Path, dict]) -> list[dict]:
     """
     モデルの定義を確かめ, 全ての誤りと注意を返す関数
 
@@ -71,15 +73,21 @@ def validate(spec: dict) -> list[dict]:
 
     Parameters
     ----------
-    spec: dict
-        モデルの定義 (load_spec で読み込んだもの)
+    spec: Union[str, Path, dict]
+        モデルの定義, またはその YAML か JSON のファイルのパス
 
     Returns
     ----------
     issues: list[dict]
         severity, code, message, node, location を持つ辞書のリスト
     """
-    issues = [asdict(issue) for issue in analyze(spec).issues]
+    # 読み込めない定義 (形の誤り, 新しい版) は 1 件の誤り
+    try:
+        loaded = load_spec(spec)
+    except (ValueError, OSError) as error:
+        issues = [asdict(Issue("error", "invalid_spec", str(error)))]
+        return issues
+    issues = [asdict(issue) for issue in analyze(loaded).issues]
 
     return issues
 
@@ -126,7 +134,10 @@ def analyze(spec: dict) -> Analysis:
     return analysis
 
 
-def check_name(name: Any, kind: str, issues: list[Issue], node: bool) -> bool:
+def check_name(
+    name: Any, kind: str, issues: list[Issue], node: bool,
+    location: Optional[str] = None
+) -> bool:
     """
     入力, ノード, 出力の名前が規則に合うかを確かめる関数
 
@@ -139,7 +150,9 @@ def check_name(name: Any, kind: str, issues: list[Issue], node: bool) -> bool:
     issues: list[Issue]
         誤りを加えるリスト
     node: bool
-        ノードの名前か (nn.Module の属性と同じ名前を禁止)
+        ノードの名前か (組み立てたモデルの部品の入れ物の属性と同じ名前を禁止)
+    location: Optional[str] = None
+        誤りの場所 (inputs.x など)
 
     Returns
     ----------
@@ -156,7 +169,7 @@ def check_name(name: Any, kind: str, issues: list[Issue], node: bool) -> bool:
             "error", "invalid_name",
             f"{kind}の名前 {name!r} は, 英字か _ で始まり英数字と _ だけからなる"
             "名前 (予約語を除く) にしてください",
-            node=str(name) if node else None
+            node=str(name) if node else None, location=location
         ))
     elif node and name in RESERVED_NAMES:
         valid = False
@@ -196,7 +209,9 @@ def check_inputs(inputs: Any, issues: list[Issue]) -> list[str]:
     # 入力ごとに名前, 項目, 形, 型, 値の作り方を確認
     names = []
     for name, value in inputs.items():
-        check_name(name, "入力", issues, node=False)
+        check_name(
+            name, "入力", issues, node=False, location=f"inputs.{name}"
+        )
         names.append(str(name))
         value = value if value is not None else {}
         if not isinstance(value, dict):
@@ -260,11 +275,13 @@ def is_json_value(value: Any) -> bool:
     plain: bool
         JSON の値なら True
     """
-    # リストは中の値も確認
+    # リストは中の値も確認, 無限大と非数は JSON に書けないので不可
     if isinstance(value, list):
         plain = all(is_json_value(item) for item in value)
+    elif isinstance(value, float):
+        plain = math.isfinite(value)
     else:
-        plain = value is None or isinstance(value, (bool, int, float, str))
+        plain = value is None or isinstance(value, (bool, int, str))
 
     return plain
 
@@ -298,6 +315,10 @@ def check_value(param: ParamSpec, value: Any) -> Optional[str]:
         message = f"{param.name} は数にしてください (今は {value!r})"
     elif param.kind == "bool" and not isinstance(value, bool):
         message = f"{param.name} は true か false にしてください (今は {value!r})"
+    elif param.kind == "str" and not isinstance(value, str):
+        message = f"{param.name} は文字にしてください (今は {value!r})"
+    elif param.kind == "list" and not isinstance(value, list):
+        message = f"{param.name} はリストにしてください (今は {value!r})"
     elif is_number and param.minimum is not None and value < param.minimum:
         message = f"{param.name} は {param.minimum} 以上 (今は {value})"
     elif is_number and param.maximum is not None and value > param.maximum:
@@ -370,9 +391,9 @@ def check_params(
                 location=location
             ))
 
-    # 必須の引数の不足
+    # 必須の引数の不足 (null も不足)
     for param in specs:
-        if param.required and param.name not in values:
+        if param.required and values.get(param.name) is None:
             issues.append(Issue(
                 "error", "missing_param",
                 f"{unit.name} の必須の引数 {param.name} がありません",
@@ -426,6 +447,12 @@ def check_node(
             ))
 
     # 部品が登録簿にあり, 使えることの確認
+    if "unit" not in node:
+        issues.append(Issue(
+            "error", "missing_unit", f"ノード {name} に unit がありません",
+            node=name, location="unit"
+        ))
+        return
     try:
         unit = get_unit(str(node.get("unit")))
     except KeyError:
@@ -666,7 +693,9 @@ def check_outputs(
         ))
         return
     for name, ref in outputs.items():
-        check_name(name, "出力", issues, node=False)
+        check_name(
+            name, "出力", issues, node=False, location=f"outputs.{name}"
+        )
         check_ref(ref, input_names, nodes, issues, None, f"outputs.{name}")
 
 
@@ -729,7 +758,7 @@ def topological_order(nodes: dict, analysis: Analysis) -> list[str]:
                 changed = True
                 break
 
-    # 残ったノードは循環 (かその先) にある
+    # 残ったノードは循環 (かその先) のノード
     for name in names:
         if name not in done:
             analysis.issues.append(Issue(
@@ -762,7 +791,7 @@ def check_unused(
     ----------
     None
     """
-    # 出力から逆にたどって, 使われる名前を集める
+    # 出力から逆にたどって, 使われる名前の収集
     outputs = spec.get("outputs")
     if not isinstance(outputs, dict):
         outputs = {}

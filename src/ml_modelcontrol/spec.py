@@ -1,5 +1,6 @@
 import copy
 import json
+import re
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -17,6 +18,22 @@ INPUT_KEYS = {"shape", "dtype", "fill", "description", "ui"}
 NODE_KEYS = {
     "unit", "params", "forward_params", "inputs", "description", "ui"
 }
+
+
+# YAML 1.2 の書き方の数 (1e-5 など) も数として読む読み込み方
+class SpecLoader(yaml.SafeLoader):
+    pass
+
+
+SpecLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:float",
+    re.compile(
+        r"^[-+]?(?:[0-9][0-9_]*\.[0-9_]*(?:[eE][-+]?[0-9]+)?"
+        r"|[0-9][0-9_]*[eE][-+]?[0-9]+|\.[0-9_]+(?:[eE][-+]?[0-9]+)?"
+        r"|\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$"
+    ),
+    list("-+0123456789.")
+)
 
 
 def load_spec(source: Union[str, Path, dict]) -> dict:
@@ -42,7 +59,7 @@ def load_spec(source: Union[str, Path, dict]) -> dict:
         if path.suffix == ".json":
             spec = json.loads(text)
         else:
-            spec = yaml.safe_load(text)
+            spec = yaml.load(text, Loader=SpecLoader)
     if not isinstance(spec, dict):
         raise ValueError("モデルの定義は辞書 (YAML のマップ) にしてください")
     spec = migrate(spec)
@@ -73,6 +90,8 @@ def migrate(spec: dict) -> dict:
     version = spec.get("format_version", FORMAT_VERSION)
     if not isinstance(version, int) or isinstance(version, bool):
         raise ValueError(f"format_version は整数にしてください: {version!r}")
+    if version < 1:
+        raise ValueError(f"format_version は 1 以上にしてください: {version}")
     if version > FORMAT_VERSION:
         raise ValueError(
             f"format_version {version} の定義は, このライブラリ (版 "
@@ -101,7 +120,7 @@ def dump_spec(spec: dict, path: Optional[Union[str, Path]] = None) -> str:
     text: str
         保存した文字
     """
-    # 一番上の項目の順をそろえ, 知らない項目は後ろに残す
+    # 一番上の項目の順の整列 (知らない項目は後ろ)
     order = [
         "format_version", "name", "description", "inputs", "nodes",
         "outputs", "ui"
@@ -111,7 +130,23 @@ def dump_spec(spec: dict, path: Optional[Union[str, Path]] = None) -> str:
         key: value for key, value in spec.items() if key not in ordered
     })
 
-    # 拡張子に合わせて書き出し
+    # ノードの項目の順もそろえ, 拡張子に合わせて書き出し
+    node_order = [
+        "unit", "description", "params", "forward_params", "inputs", "ui"
+    ]
+    if isinstance(ordered.get("nodes"), dict):
+        ordered["nodes"] = {
+            name: (
+                {
+                    **{key: node[key] for key in node_order if key in node},
+                    **{
+                        key: value for key, value in node.items()
+                        if key not in node_order
+                    }
+                } if isinstance(node, dict) else node
+            )
+            for name, node in ordered["nodes"].items()
+        }
     is_json = path is not None and Path(path).suffix == ".json"
     if is_json:
         text = json.dumps(ordered, ensure_ascii=False, indent=2) + "\n"
@@ -151,7 +186,7 @@ def parse_ref(ref: str) -> tuple[str, Optional[str]]:
 
 def node_inputs(node: dict) -> Any:
     """
-    ノードの inputs を返す関数 (書いていない場合は空の辞書)
+    ノードの inputs を, 書いていない場合は空の辞書にして返す関数
 
     Parameters
     ----------
