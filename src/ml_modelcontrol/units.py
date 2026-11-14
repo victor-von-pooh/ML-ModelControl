@@ -160,7 +160,7 @@ PARAM_CHOICES = {
     ("RNNCell", "nonlinearity"): ["tanh", "relu"],
     ("Upsample", "mode"): [
         "nearest", "nearest-exact", "linear", "bilinear", "bicubic",
-        "trilinear"
+        "trilinear", "area"
     ]
 }
 
