@@ -59,7 +59,7 @@ def to_arg(value: Any) -> Any:
     return arg
 
 
-def follow_path(value: Any, path: list) -> Any:
+def follow_path(value: Any, path: list, lenient: bool = False) -> Any:
     """
     出力の値から, 口の取り出し方 (番号か名前の並び) で値を取り出す関数
 
@@ -69,6 +69,9 @@ def follow_path(value: Any, path: list) -> Any:
         部品の戻り値
     path: list
         番号 (タプルの要素) か名前 (属性かキー) の並び
+    lenient: bool = False
+        辞書に無いキーを None にするか (Hugging Face の出力はモデルによって
+        pooler_output などを持たないため). False なら KeyError
 
     Returns
     ----------
@@ -82,7 +85,7 @@ def follow_path(value: Any, path: list) -> Any:
         if isinstance(step, int):
             item = item[step]
         elif isinstance(item, dict):
-            item = item.get(step)
+            item = item.get(step) if lenient else item[step]
         else:
             item = getattr(item, step)
 
@@ -117,6 +120,15 @@ class GraphModel(nn.Module):
         self.connections = analysis.connections
         self.ports = {
             name: list(analysis.units[name].inputs) for name in self.order
+        }
+        # 無いキーを None にするノード (Hugging Face の出力)
+        self.lenient = {
+            name for name in self.order
+            if analysis.units[name].source == "transformers"
+        }
+        # 誤りの文に添える部品の名前
+        self.unit_names = {
+            name: analysis.units[name].name for name in self.order
         }
         self.paths = {
             name: {
@@ -191,7 +203,9 @@ class GraphModel(nn.Module):
         if name in self.paths:
             paths = self.paths[name]
             port_name = port if port is not None else next(iter(paths))
-            value = follow_path(value, paths[port_name])
+            value = follow_path(
+                value, paths[port_name], name in self.lenient
+            )
 
         return value
 
@@ -231,7 +245,16 @@ class GraphModel(nn.Module):
                 args.append(items[0] if items else None)
             elif items:
                 kwargs[port.name] = items[0]
-        output = self.nodes[name](*args, **kwargs)
+        # 部品の中の誤りには, どのノードで起きたかを添える
+        try:
+            output = self.nodes[name](*args, **kwargs)
+        except Exception as error:
+            if hasattr(error, "add_note"):
+                error.add_note(
+                    f"ノード {name} ({self.unit_names.get(name, '?')}) で起きた"
+                    "誤り"
+                )
+            raise
 
         return output
 

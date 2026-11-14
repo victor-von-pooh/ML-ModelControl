@@ -66,9 +66,9 @@ def path_code(base: str, path: list, keyed: bool) -> str:
 # 型の分からない値から名前で取り出す関数 (書き出すコードに必要な場合だけ置く)
 PICK_CODE = [
     "def _pick(value, name):",
-    "    # 辞書はキー (無いキーは None), それ以外は属性",
+    "    # 辞書はキー, それ以外は属性",
     "    if isinstance(value, dict):",
-    "        return value.get(name)",
+    "        return value[name]",
     "    return getattr(value, name)",
     "", ""
 ]

@@ -1,3 +1,4 @@
+import sys
 import json
 from pathlib import Path
 
@@ -584,7 +585,7 @@ outputs:
     assert "missing_param" in codes(spec)
     spec["format_version"] = 99
     assert validate(spec)[0]["code"] == "invalid_spec"
-    with pytest.raises(ValueError, match="登録済み"):
+    with pytest.raises(ValueError, match="組み込みの部品"):
         register_unit(ScaledSum, name="nn.Linear")
 
     # 形の無い入力がある場合は計算なし
@@ -937,3 +938,83 @@ outputs:
     spec = make_spec()
     spec["nodes"] = [1, 2]
     assert "invalid_nodes" in codes(spec)
+
+
+def test_runtime_checks(tmp_path: Path) -> None:
+    """
+    実行時の誤りのノードの名前, 自作の部品の無いキー, register_unit の値,
+    読めないファイルの扱いを確かめる関数
+
+    Parameters
+    ----------
+    tmp_path: Path
+        pytest が用意する一時ディレクトリ
+
+    Returns
+    ----------
+    None
+    """
+    # 組み立てたモデルの部品の中の誤りに, ノードの名前を添える
+    model = build_model(make_spec(), seed=0)
+    with pytest.raises(RuntimeError) as caught:
+        model(torch.randn(3, 5, 7))
+    notes = getattr(caught.value, "__notes__", [])
+    assert sys.version_info < (3, 11) or any("ノード" in note for note in notes)
+
+    # 自作の部品の辞書に無いキーは, None ではなく誤り
+    register_unit(
+        Stats, name="custom.StatsMissing",
+        outputs={"zzz": ["nokey"], "mean": ["mean"]}, overwrite=True
+    )
+    spec = make_spec("""
+inputs:
+  x: {shape: [2, 3, 4]}
+nodes:
+  s: {unit: custom.StatsMissing, inputs: x}
+outputs:
+  y: "s:zzz"
+""")
+    node = infer(spec)["nodes"]["s"]
+    assert node["status"] == "error" and "nokey" in node["error"]
+
+    # register_unit の名前と口の確認, docstring の説明
+    with pytest.raises(ValueError, match="名前"):
+        register_unit(Stats, name="bad name!")
+    with pytest.raises(ValueError, match="重なって"):
+        register_unit(Stats, name="custom.Dup", outputs=["a", "a"])
+    with pytest.raises(ValueError, match="識別子"):
+        register_unit(Stats, name="custom.Hyphen", outputs=["out-1", "x"])
+    unit = register_unit(SplitHalf, name="custom.Doc", overwrite=True)
+    assert unit.description == ""
+    class Documented(nn.Module):
+        """
+        説明付きの自作の部品
+
+        2 行目以降は使わない
+        """
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            """
+            入力をそのまま返す関数
+
+            Parameters
+            ----------
+            x: torch.Tensor
+                入力
+
+            Returns
+            ----------
+            x: torch.Tensor
+                入力
+            """
+            return x
+
+    unit = register_unit(Documented, name="custom.Doc2", overwrite=True)
+    assert unit.description == "説明付きの自作の部品"
+
+    # 読めない YAML と, パスの代わりの YAML の文字は ValueError
+    broken = tmp_path / "broken.yaml"
+    broken.write_text("nodes: [", encoding="utf-8")
+    assert validate(broken)[0]["code"] == "invalid_spec"
+    with pytest.raises(ValueError, match="YAML の文字"):
+        load_spec("format_version: 1\nnodes: {}")

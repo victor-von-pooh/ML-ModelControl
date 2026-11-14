@@ -54,12 +54,21 @@ def load_spec(source: Union[str, Path, dict]) -> dict:
     if isinstance(source, dict):
         spec = copy.deepcopy(source)
     else:
+        # パスの代わりに YAML の文字を渡した場合の案内
+        if isinstance(source, str) and ("\n" in source or ": " in source):
+            raise ValueError(
+                "ファイルのパスではなく YAML の文字のようです. "
+                "yaml.safe_load で辞書にしてから渡してください"
+            )
         path = Path(source)
         text = path.read_text(encoding="utf-8")
-        if path.suffix == ".json":
-            spec = json.loads(text)
-        else:
-            spec = yaml.load(text, Loader=SpecLoader)
+        try:
+            if path.suffix == ".json":
+                spec = json.loads(text)
+            else:
+                spec = yaml.load(text, Loader=SpecLoader)
+        except (yaml.YAMLError, json.JSONDecodeError) as error:
+            raise ValueError(f"{path} を読めません: {error}") from error
     if not isinstance(spec, dict):
         raise ValueError("モデルの定義は辞書 (YAML のマップ) にしてください")
     spec = migrate(spec)
