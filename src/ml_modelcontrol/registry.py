@@ -300,14 +300,21 @@ def types_of(annotation: Any) -> Optional[list]:
     found: list[str] = []
     for option in options:
         origin = get_origin(option) or option
+        # 選択肢 (Literal) は, 選択肢の値の種類
+        if get_origin(option) is Literal:
+            for value in get_args(option):
+                kind = simple.get(type(value))
+                if kind is None:
+                    return None
+                if kind not in found:
+                    found.append(kind)
+            continue
         if option in simple:
             name = simple[option]
         elif origin in (list, tuple) or (
             inspect.isclass(origin) and origin.__name__ == "Sequence"
         ):
             name = "list"
-        elif get_origin(option) is Literal:
-            name = "str"
         else:
             return None
         if name not in found:
