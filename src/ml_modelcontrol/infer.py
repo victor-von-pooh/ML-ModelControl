@@ -9,8 +9,9 @@ from ml_modelcontrol.model import GraphModel, NodeBuildError, follow_path
 from ml_modelcontrol.spec import load_spec
 from ml_modelcontrol.validate import Analysis, Issue, analyze
 
-# 形の推定で計算する前に確かめる, パラメータ数の上限の既定値
+# 形の推定で計算する前に確かめる, パラメータ数と入力の例の要素数の上限の既定値
 MAX_PARAMS = 200_000_000
+MAX_INPUT_ELEMENTS = 10_000_000
 
 
 def describe(value: Any) -> dict:
@@ -146,7 +147,8 @@ def estimate_params(spec: dict, analysis: Analysis) -> Optional[int]:
 
 
 def infer(
-    spec: Union[str, Path, dict], max_params: int = MAX_PARAMS
+    spec: Union[str, Path, dict], max_params: int = MAX_PARAMS,
+    max_input_elements: int = MAX_INPUT_ELEMENTS
 ) -> dict:
     """
     入力の例をモデルに通し, ノードごとの出力の形とパラメータ数を求める関数
@@ -160,6 +162,9 @@ def infer(
         モデルの定義, またはその YAML か JSON のファイルのパス
     max_params: int = MAX_PARAMS
         計算する前に確かめるパラメータ数の上限. 超える場合は計算しない
+    max_input_elements: int = MAX_INPUT_ELEMENTS
+        入力の例の要素数の上限. 超える場合は計算しない (大きすぎる形で
+        メモリを使い切らないため)
 
     Returns
     ----------
@@ -190,6 +195,18 @@ def infer(
     ]
     if not analysis.ok or no_shape:
         return result
+    for name, value in spec["inputs"].items():
+        count = 1
+        for size in value["shape"]:
+            count *= size
+        if count > max_input_elements:
+            result["issues"].append(vars(Issue(
+                "warning", "input_too_large",
+                f"入力 {name} の例の要素数 ({count}) が上限 "
+                f"({max_input_elements}) を超えるので, 形を推定しません",
+                location=f"inputs.{name}.shape"
+            )))
+            return result
 
     # 先にパラメータ数を数え, 上限を超える場合は計算なし
     # 数えられない場合 (meta デバイスで作れない部品) は注意を加えて計算

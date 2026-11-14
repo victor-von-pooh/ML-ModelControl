@@ -516,3 +516,30 @@ outputs:
     assert not result["ok"]
     assert result["nodes"] == {}
     assert "no_shape" in {issue["code"] for issue in result["issues"]}
+
+
+def test_input_checks() -> None:
+    """
+    入力の型の書き間違い (リスト) と, 大きすぎる入力の例を確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 型と値の作り方にリストを書いても, 例外ではなく誤り
+    spec = make_spec()
+    spec["inputs"]["x"]["dtype"] = ["float32"]
+    spec["inputs"]["x"]["fill"] = {"a": 1}
+    assert {"invalid_dtype", "invalid_fill"} <= codes(spec)
+
+    # 要素数が上限を超える入力の例は計算せずに注意
+    spec = make_spec()
+    spec["inputs"]["x"]["shape"] = [100000, 100000, 6]
+    result = infer(spec)
+    assert not result["ok"]
+    assert result["nodes"] == {}
+    assert "input_too_large" in {issue["code"] for issue in result["issues"]}
