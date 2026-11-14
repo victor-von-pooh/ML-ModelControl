@@ -250,3 +250,15 @@ outputs:
         "kind": "none"
     }
     assert "unchecked_model" in {issue["code"] for issue in validate(spec)}
+
+    # 書き出したコードも, 無い出力 (pooler_output) は組み立てたモデルと
+    # 同じく None
+    spec["outputs"] = {"pooled": "bert:pooler_output"}
+    code = export_python(spec)
+    assert "bert.get('pooler_output')" in code
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        exported, _ = run_exported(code, ())
+    ids = torch.zeros(2, 5, dtype=torch.long)
+    assert exported(ids) is None
+    assert build_model(spec)(ids) is None

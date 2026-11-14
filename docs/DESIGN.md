@@ -97,7 +97,7 @@ outputs:
 | Kornia | `kornia.<クラス名>` | 画像の拡張 (`kornia.augmentation`), フィルタ, 色の変換, 明るさの調整, 幾何の変換の層 |
 | MONAI | `monai.<クラス名>` | 医用画像のネットワーク (`monai.networks.nets`. `UNet`, `SwinUNETR` など) と部品 (`monai.networks.blocks`) |
 | segmentation_models_pytorch | `smp.<クラス名>` | 画像の領域分割のモデル (`Unet`, `FPN`, `DeepLabV3Plus` など. 符号化器を名前で選ぶ) |
-| 自作 | 登録した名前 | `register_unit` で `nn.Module` のクラスを登録する (Python のコードから. モデルの定義からは登録できない) |
+| 自作 | 登録した名前 | `register_unit` で `nn.Module` のクラスを登録する (Python のコードから. モデルの定義からは登録できない). 出力の口は, タプルの順の名前のリストか, 口ごとの取り出し方 (番号か, 属性かキーの名前の並び) の辞書で付ける |
 
 ### 口
 
@@ -113,7 +113,7 @@ outputs:
 - **確認** (`validate`): 定義の形, 名前, 部品の名前, 引数 (名前の誤り, 必須の不足, 範囲), つなぎ先の存在, 口, 循環, 使われないノードを調べる. 最初の誤りで止めず, 全ての誤りと注意を返す (GUI でノードごとに示すため). 1 件は `{node, location, code, severity, message}` (`location` は `params.out_features` や `inputs.edge_index`, `code` は決まった英字の識別子, `severity` は `error` か `warning`). ネットワークは使わない
 - **組み立て** (`build_model`): `nn.Module` (`GraphModel`) を返す. ノードの部品を `nn.ModuleDict` に持ち, 前もって決めた順 (トポロジカル順. 同じ順位は定義に書いた順) に計算する. 重みは `state_dict` で保存して読み込む (モデルごとの `torch.save` は, 読み込みに `weights_only=False` が要る). 乱数の種を指定できる. 出力に届かないノードも組み立てて計算する (確認では注意)
 - **形の推定** (`infer`): 入力の例 (`shape`, `dtype`, `fill`) から値を作り, cpu で `eval()` と勾配なしで, ノードを 1 つずつ計算する. 各ノードの出力の口ごとの形と型 (`None` も可), パラメータ数 (全体と学習するもの. 共有した重みは 1 回だけ数える) を返す. 失敗したノードはエラーを, その先のノードは「前のノードの失敗で計算できない」を返す. 大きすぎるモデルでメモリを使い切らないように, 先に (meta デバイスで) パラメータ数を数え, 上限 (既定 2 億) を超える場合は計算せずにパラメータ数だけを返す. 形 (`shape`) の無い入力がある場合は計算しない. 結果は `ok`, `issues`, `nodes` (ノードごとの `status` (`ok`, `error`, `skipped`), `outputs`, `params`, `trainable`, `error`), `outputs`, `params`, `trainable`, `estimated_only`
-- **書き出し** (`export_python`): 同じ計算をする `nn.Module` のクラスの Python のコードを書き出す. `state_dict` のキーは `build_model` と同じにする
+- **書き出し** (`export_python`): 同じ計算をする `nn.Module` のクラスの Python のコードを書き出す. `state_dict` のキーは `build_model` と同じにする. 出力の口の名前での取り出しは, 組み立てたモデルと同じにする. Hugging Face の出力 (辞書) は `.get` (無いキーは `None`) で書き, 型の分からない自作の部品の出力は, 辞書ならキー, それ以外は属性で取り出す関数 (`_pick`) をコードに置いて使う. 部品を作る行とノードを呼ぶ行は, 79 文字を超える場合に引数を折り返す (出力の辞書の行と, とても長い名前の行は超えることがある)
 
 ## 安全
 
