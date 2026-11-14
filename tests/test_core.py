@@ -1031,3 +1031,48 @@ outputs:
     assert validate(broken)[0]["code"] == "invalid_spec"
     with pytest.raises(ValueError, match="YAML の文字"):
         load_spec("format_version: 1\nnodes: {}")
+
+
+def test_any_param_types() -> None:
+    """
+    種類が任意の引数も, 型ヒントから分かる種類 (int | tuple など) で値を
+    確かめることを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 型ヒントから取り出した種類
+    conv = {param.name: param for param in get_unit("nn.Conv2d").params}
+    assert conv["kernel_size"].types == ["int", "list"]
+    norm = {param.name: param for param in get_unit("nn.BatchNorm2d").params}
+    assert norm["momentum"].types == ["float", "null"]
+
+    # 種類に合わない値は計算する前に誤り, 合う値は通る
+    spec = make_spec("""
+inputs:
+  x: {shape: [1, 3, 8, 8]}
+nodes:
+  c:
+    unit: nn.Conv2d
+    params: {in_channels: 3, out_channels: 4, kernel_size: three}
+    inputs: x
+  b:
+    unit: nn.BatchNorm2d
+    params: {num_features: 4, momentum: x}
+    inputs: c
+outputs:
+  y: b
+""")
+    locations = {
+        issue["location"] for issue in validate(spec)
+        if issue["code"] == "invalid_value"
+    }
+    assert locations == {"params.kernel_size", "params.momentum"}
+    spec["nodes"]["c"]["params"]["kernel_size"] = [3, 3]
+    spec["nodes"]["b"]["params"]["momentum"] = 0.1
+    assert validate(spec) == []

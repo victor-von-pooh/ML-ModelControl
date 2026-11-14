@@ -306,6 +306,43 @@ def is_json_value(value: Any) -> bool:
     return plain
 
 
+# 値の種類の名前 (誤りの文に使う)
+TYPE_NAMES = {
+    "int": "整数", "float": "数", "bool": "真偽値", "str": "文字",
+    "list": "リスト", "null": "null"
+}
+
+
+def matches_types(value: Any, types: list) -> bool:
+    """
+    値が, 受け取れる種類のどれかに合うかを返す関数
+
+    Parameters
+    ----------
+    value: Any
+        値 (None は呼び出し側で除く)
+    types: list
+        int, float, bool, str, list, null の並び
+
+    Returns
+    ----------
+    matched: bool
+        どれかに合えば True (整数は数としても可)
+    """
+    is_bool = isinstance(value, bool)
+    checks = {
+        "int": isinstance(value, int) and not is_bool,
+        "float": isinstance(value, (int, float)) and not is_bool,
+        "bool": is_bool,
+        "str": isinstance(value, str),
+        "list": isinstance(value, list),
+        "null": value is None
+    }
+    matched = any(checks.get(item, True) for item in types)
+
+    return matched
+
+
 def check_value(param: ParamSpec, value: Any) -> Optional[str]:
     """
     引数の値が種類と範囲に合うかを確かめる関数
@@ -343,6 +380,11 @@ def check_value(param: ParamSpec, value: Any) -> Optional[str]:
         message = f"{param.name} は {param.minimum} 以上 (今は {value})"
     elif is_number and param.maximum is not None and value > param.maximum:
         message = f"{param.name} は {param.maximum} 以下 (今は {value})"
+    elif param.kind == "any" and param.types and not matches_types(
+        value, param.types
+    ):
+        names = " か ".join(TYPE_NAMES[item] for item in param.types)
+        message = f"{param.name} は {names}にしてください (今は {value!r})"
     elif param.choices is not None and value not in param.choices:
         message = f"{param.name} は {param.choices} のどれか (今は {value!r})"
 

@@ -34,6 +34,10 @@ class ParamSpec:
     # 値の候補 (選択肢と違い, 候補以外も書ける. モデルの名前など)
     suggestions: Optional[list] = None
 
+    # 種類が任意 (any) の引数が受け取る値の種類 (int, float, bool, str,
+    # list, null の並び. 型ヒントから分からない場合は None で確かめない)
+    types: Optional[list] = None
+
 
 @dataclass
 class PortSpec:
@@ -265,6 +269,53 @@ def kind_of(annotation: Any, default: Any) -> str:
     return kind
 
 
+def types_of(annotation: Any) -> Optional[list]:
+    """
+    型ヒントから, 定義の値 (JSON) として受け取れる種類を取り出す関数
+
+    int | tuple[int, int] は int と list, Optional[float] は float と null の
+    ように, Union を分けて調べる. テンソルや関数など値で書けない型を含む
+    場合と, 型ヒントが無いか読めない場合は確かめないので None
+
+    Parameters
+    ----------
+    annotation: Any
+        型ヒント
+
+    Returns
+    ----------
+    types: Optional[list]
+        int, float, bool, str, list, null の並び, 分からない場合は None
+    """
+    # 型ヒントが無い場合と, 文字のまま読めない場合は確かめない
+    if annotation is inspect.Parameter.empty or isinstance(annotation, str):
+        return None
+    options = (
+        list(get_args(annotation)) if is_union(annotation) else [annotation]
+    )
+    simple = {
+        bool: "bool", int: "int", float: "float", str: "str",
+        type(None): "null"
+    }
+    found: list[str] = []
+    for option in options:
+        origin = get_origin(option) or option
+        if option in simple:
+            name = simple[option]
+        elif origin in (list, tuple) or (
+            inspect.isclass(origin) and origin.__name__ == "Sequence"
+        ):
+            name = "list"
+        elif get_origin(option) is Literal:
+            name = "str"
+        else:
+            return None
+        if name not in found:
+            found.append(name)
+
+    return found
+
+
 def choices_of(annotation: Any) -> Optional[list]:
     """
     型ヒントが選択肢 (Literal) の場合に, その値を返す関数
@@ -423,10 +474,11 @@ def params_from_init(cls: type) -> tuple[list[ParamSpec], bool]:
         annotation = parameter.annotation
         if isinstance(annotation, str):
             annotation = hints.get(name, annotation)
+        kind = kind_of(annotation, parameter.default)
         params.append(ParamSpec(
-            name=name, kind=kind_of(annotation, parameter.default),
-            default=to_plain(default), required=required,
-            choices=choices_of(annotation)
+            name=name, kind=kind, default=to_plain(default),
+            required=required, choices=choices_of(annotation),
+            types=types_of(annotation) if kind == "any" else None
         ))
 
     return params, extra
