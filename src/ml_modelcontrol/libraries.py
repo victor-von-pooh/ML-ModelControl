@@ -368,6 +368,13 @@ def register_class(
     )
     apply_notes(spec, notes or {})
 
+    # Kornia の数の組の引数は, 型ヒントと違い数 1 つも受け取るものが多いので,
+    # 数も受け付ける (正しい値を確認で誤りにしないため)
+    if source == "kornia":
+        for param in spec.params:
+            if param.types == ["list"]:
+                param.types = ["list", "float"]
+
     # 別の部品やテンソルを引数に取るクラスと, 辞書の入力を取るクラス
     # (異種グラフの層など) は今は対象外
     if needs_module(cls):

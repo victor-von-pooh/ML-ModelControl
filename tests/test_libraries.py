@@ -325,3 +325,42 @@ outputs:
     assert result["ok"], result
     assert result["outputs"]["logits"]["shape"] == [2, 4]
     assert result["outputs"]["hidden"]["shape"] == [2, 5, 8]
+
+
+def test_param_types_of_libraries() -> None:
+    """
+    数の選択肢 (Literal[8, 16]) と Kornia の数の組の引数が, 正しい値を確認で
+    誤りにしないことを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 数の選択肢は数の種類 (選択肢は choices で確かめる)
+    if has_module("segmentation_models_pytorch"):
+        params = {
+            param.name: param
+            for param in get_unit("smp.DeepLabV3Plus").params
+        }
+        assert params["encoder_output_stride"].types == ["int"]
+        spec = one_node_spec(
+            "smp.DeepLabV3Plus",
+            {"encoder_name": "resnet18", "encoder_output_stride": 16}, "x",
+            [1, 3, 32, 32]
+        )
+        assert [
+            issue for issue in validate(spec)
+            if issue["code"] == "invalid_value"
+        ] == []
+
+    # Kornia の数の組の引数は数 1 つも受け付ける
+    if has_module("kornia"):
+        params = {
+            param.name: param
+            for param in get_unit("kornia.RandomBrightness").params
+        }
+        assert "float" in (params["brightness"].types or [])
