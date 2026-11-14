@@ -1,4 +1,5 @@
 import inspect
+import re
 from typing import Callable, Optional, Union
 
 from torch import nn
@@ -543,6 +544,17 @@ def registered_names() -> list[str]:
     return names
 
 
+# 組み込みの部品の名前の頭 (自作の部品には使えない. 版が上がって同じ名前の
+# 部品が増えた場合に重ならないため)
+BUILTIN_PREFIXES = {
+    "nn", "op", "pyg", "hf", "tv", "timm", "audio", "einops", "kornia",
+    "monai", "smp"
+}
+
+# 自作の部品の名前 (識別子を . でつないだもの)
+UNIT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*")
+
+
 def output_ports(
     outputs: Optional[Union[list[str], dict[str, list]]]
 ) -> list[PortSpec]:
@@ -569,6 +581,14 @@ def output_ports(
     if outputs is None:
         return [PortSpec("out")]
     if not isinstance(outputs, dict):
+        for port in outputs:
+            if not isinstance(port, str) or not port.isidentifier():
+                raise ValueError(
+                    f"出力の口の名前 {port!r} は識別子 (英字か _ で始まる "
+                    "英数字と _) にしてください"
+                )
+        if len(set(outputs)) != len(outputs):
+            raise ValueError(f"出力の口の名前が重なっています: {outputs}")
         ports = [
             PortSpec(port, path=[index]) for index, port in enumerate(outputs)
         ]
@@ -638,16 +658,36 @@ def register_unit(
         raise TypeError(f"{cls!r} は nn.Module のクラスではありません")
     load_builtin_units()
 
-    # 組み込みの部品と, 上書きしない場合の同じ名前の自作の部品は不可
+    # 名前は識別子を . でつないだもの. 組み込みの部品と, 上書きしない場合の
+    # 同じ名前の自作の部品は不可
     unit_name = name or cls.__name__
-    existing = REGISTRY.get(unit_name)
-    if existing is not None and (
-        existing.source != "custom" or not overwrite
-    ):
+    if not UNIT_NAME.fullmatch(unit_name):
         raise ValueError(
-            f"部品 {unit_name} は登録済みです (自作の部品は overwrite=True で"
-            "上書き可)"
+            f"部品の名前 {unit_name!r} は, 英字か _ で始まる英数字と _ を . で"
+            "つないだ名前にしてください (例: my.Block)"
         )
+    if unit_name.split(".")[0] in BUILTIN_PREFIXES:
+        raise ValueError(
+            f"部品の名前 {unit_name} は組み込みの部品の頭 "
+            f"({unit_name.split('.')[0]}.) で始まるので使えません. 別の頭"
+            "にしてください (例: my.Block)"
+        )
+    existing = REGISTRY.get(unit_name)
+    if existing is not None and existing.source != "custom":
+        raise ValueError(
+            f"部品 {unit_name} は組み込みの部品なので登録できません. 別の名前"
+            "にしてください"
+        )
+    if existing is not None and not overwrite:
+        raise ValueError(
+            f"部品 {unit_name} は登録済みです (overwrite=True で上書き可)"
+        )
+    # 説明を省いた場合は, そのクラス自身の docstring の 1 行目 (親の
+    # nn.Module の説明は使わない)
+    if description == "":
+        description = inspect.cleandoc(
+            cls.__dict__.get("__doc__") or ""
+        ).split("\n")[0]
 
     # 引数, 入力の口, 出力の口を決めて登録
     params, extra = params_from_init(cls)

@@ -45,8 +45,13 @@ issues = validate("model.yaml")          # 誤りと注意 (ノードごと)
 result = infer("model.yaml")             # ノードごとの出力の形とパラメータ数
 model = build_model("model.yaml", seed=0)  # nn.Module
 logits = model(x)                        # 入力は定義の順の位置か, 名前のキーワード
-units = describe_units()                 # 部品の一覧 (引数と口の説明付き)
+units = describe_units()                 # 部品の一覧 (引数と口の説明付き. JSON にできる辞書)
+unit = get_unit("nn.Linear")             # 1 つの部品 (UnitSpec. 引数は unit.params)
+spec = load_spec("model.yaml")           # 定義の辞書 (版を今の版に直したもの)
+text = dump_spec(spec)                   # 決まったキーの順の YAML の文字
 ```
+
+`build_model` と `export_python` は, 誤りのある定義では `SpecError` を投げる (`error.issues` に `validate` と同じ形の誤りの一覧). 定義のファイルを読めない場合 (YAML の誤りなど) は `ValueError` (`validate` は `invalid_spec` の誤りとして返す). 組み立てたモデルの計算の途中で部品が誤りを出した場合は, どのノードで起きたかを誤りに添える (Python 3.11 以上).
 
 `infer` は, 定義に誤りがあっても, 誤りのあるノード (つなぎ先の無い口, 引数の誤り, 部品を作れないものなど) とその先のノードだけを除いて計算する (組み立ての途中でも形を確かめられるように). そのときの `ok` は `false` で, 除いたノードの `status` は `error` (誤りの文付き) か `skipped`, `params` は計算できた部分の合計. `build_model` と `export_python` は誤りのある定義では作らない.
 
@@ -69,7 +74,7 @@ units = describe_units()                 # 部品の一覧 (引数と口の説�
 
 同梱した例のモデルの定義 (全結合, 残差, CNN, LSTM, Transformer のエンコーダー, GCN, BERT の分類) は `list_examples()` で一覧にし, `load_example("cnn_classifier")` で読み込める. 自分のモデルを書き始めるときの元にできる.
 
-`export_python("model.yaml")` で, 同じ計算をする `nn.Module` のクラスの Python のコードを書き出せる (`state_dict` のキーは `build_model` と同じ).
+`export_python("model.yaml")` で, 同じ計算をする `nn.Module` のクラスの Python のコードを書き出せる (`state_dict` のキーは `build_model` と同じ). 演算 (`op.Add` など) と Hugging Face の部品を使う場合, 書き出したコードは `ml_modelcontrol` を読み込む (`from ml_modelcontrol import ops` など) ので, 動かす環境にもこのライブラリを入れる.
 
 自作の部品は `register_unit(MyBlock, name="my.Block")` で登録すると, 定義の `unit` に書ける (`forward` が複数の値を返す場合は `outputs=["a", "b"]` で口の名前を付ける. 属性や辞書のキーで値を返す場合は `outputs={"logits": ["logits"], "last": ["hidden_states", -1]}` のように口ごとの取り出し方を書く).
 

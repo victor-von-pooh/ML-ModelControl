@@ -429,7 +429,9 @@ def run_nodes(
                 values[name] = model.run_node(name, values)
                 for port, path in model.paths[name].items():
                     entry["outputs"][port] = describe(
-                        follow_path(values[name], path)
+                        follow_path(
+                            values[name], path, name in model.lenient
+                        )
                     )
             except Exception as error:
                 entry["status"] = "error"
