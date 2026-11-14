@@ -8,8 +8,8 @@ from typing import Any, Callable, Optional
 from torch import nn
 
 from ml_modelcontrol.registry import (
-    REGISTRY, ParamSpec, PortSpec, UnitSpec, apply_notes, needs_module,
-    params_from_init, ports_from_forward, register
+    REGISTRY, ParamSpec, PortSpec, UnitSpec, apply_notes, describe_params,
+    needs_module, params_from_init, ports_from_forward, register
 )
 
 # 学習済みの重みを読む引数と, 形の推定で置き換える「読まない」値
@@ -367,6 +367,7 @@ def register_class(
         code_import=code_import, offline=offline
     )
     apply_notes(spec, notes or {})
+    describe_params(spec)
 
     # Kornia の数の組の引数は, 型ヒントと違い数 1 つも受け取るものが多いので,
     # 数も受け付ける (正しい値を確認で誤りにしないため)

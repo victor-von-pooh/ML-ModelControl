@@ -10,8 +10,8 @@ from ml_modelcontrol.external import (
 )
 from ml_modelcontrol.libraries import load_library_units
 from ml_modelcontrol.registry import (
-    REGISTRY, ParamSpec, PortSpec, UnitSpec, apply_notes, needs_module,
-    params_from_init, ports_from_forward, register
+    REGISTRY, ParamSpec, PortSpec, UnitSpec, apply_notes, describe_params,
+    needs_module, params_from_init, ports_from_forward, register
 )
 
 # 部品にしない torch.nn のクラス (入れ物と, 他の部品の土台のクラス)
@@ -467,6 +467,7 @@ def register_torch_unit(cls: type) -> UnitSpec:
     apply_notes(spec, TORCH_NOTES.get(cls.__name__, {}))
     if not spec.description:
         spec.description = default_description(cls.__name__)
+    describe_params(spec)
     for param in spec.params:
         choices = PARAM_CHOICES.get((cls.__name__, param.name))
         if choices is not None:
