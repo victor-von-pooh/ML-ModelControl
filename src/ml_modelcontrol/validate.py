@@ -1,3 +1,4 @@
+import difflib
 import keyword
 import math
 import re
@@ -7,7 +8,7 @@ from typing import Any, Optional, Union
 
 from torch import nn
 
-from ml_modelcontrol.registry import ParamSpec, UnitSpec, get_unit
+from ml_modelcontrol.registry import REGISTRY, ParamSpec, UnitSpec, get_unit
 from ml_modelcontrol.spec import (
     GRAPH_KEYS, INPUT_KEYS, NODE_KEYS, load_spec, node_inputs, parse_ref
 )
@@ -120,9 +121,16 @@ def analyze(spec: dict) -> Analysis:
             ))
     input_names = check_inputs(spec.get("inputs"), issues)
     nodes = spec.get("nodes")
-    if not isinstance(nodes, dict) or not nodes:
+    if isinstance(nodes, dict) and not nodes or nodes is None:
         issues.append(Issue(
             "error", "no_nodes", "nodes に 1 つ以上のノードを書いてください",
+            location="nodes"
+        ))
+        nodes = {}
+    elif not isinstance(nodes, dict):
+        issues.append(Issue(
+            "error", "invalid_nodes",
+            "nodes はノードの名前と定義の辞書にしてください (リストではなく)",
             location="nodes"
         ))
         nodes = {}
@@ -385,7 +393,10 @@ def check_params(
         if key not in by_name and not extra:
             issues.append(Issue(
                 "error", "unknown_param",
-                f"{unit.name} に引数 {key} はありません", node=name,
+                f"{unit.name} に引数 {key} はありません"
+                f"{suggest(str(key), list(by_name))} (引数: "
+                f"{', '.join(list(by_name)[:12]) or 'なし'}"
+                f"{', …' if len(by_name) > 12 else ''})", node=name,
                 location=location
             ))
             continue
@@ -483,7 +494,8 @@ def check_node(
     except KeyError:
         issues.append(Issue(
             "error", "unknown_unit",
-            f"部品 {node.get('unit')!r} は登録されていません", node=name,
+            f"部品 {node.get('unit')!r} は登録されていません"
+            f"{suggest(str(node.get('unit')), list(REGISTRY))}", node=name,
             location="unit"
         ))
         return
@@ -550,6 +562,11 @@ def check_connections(
     required = [
         port for port in unit.inputs if not port.optional and not port.variadic
     ]
+    # 必須の口が無く, 可変の数の口が 1 つの部品 (op.Add など) は, その口に
+    # 1 つだけつなぐ
+    variadic = [port for port in unit.inputs if port.variadic]
+    if isinstance(inputs, str) and not required and len(variadic) == 1:
+        inputs = {variadic[0].name: [inputs]}
     if isinstance(inputs, str):
         if len(required) != 1:
             issues.append(Issue(
@@ -563,7 +580,8 @@ def check_connections(
     if not isinstance(inputs, dict):
         issues.append(Issue(
             "error", "invalid_inputs",
-            "inputs は口の名前とつなぎ先の辞書にしてください", node=name,
+            "inputs は口の名前とつなぎ先の辞書にしてください (必須の口が 1 つの"
+            "部品は, つなぎ先の文字 1 つでも書ける)", node=name,
             location="inputs"
         ))
         return {}
@@ -663,7 +681,8 @@ def check_ref(
     if name not in nodes:
         issues.append(Issue(
             "error", "unknown_ref",
-            f"つなぎ先 {name} は入力にもノードにもありません", node=node,
+            f"つなぎ先 {name} は入力にもノードにもありません"
+            f"{suggest(name, [*input_names, *map(str, nodes)])}", node=node,
             location=location
         ))
         return None
@@ -793,16 +812,89 @@ def topological_order(nodes: dict, analysis: Analysis) -> list[str]:
                 changed = True
                 break
 
-    # 残ったノードは循環 (かその先) のノード
-    for name in names:
-        if name not in done:
+    # 残ったノードのうち, 自分に戻ってくるものは循環 (誤り), それ以外は
+    # 循環の先 (計算できないので注意)
+    left = [name for name in names if name not in done]
+    for name in left:
+        if in_cycle(analysis, name, set(left)):
             analysis.issues.append(Issue(
-                "error", "cycle",
-                f"ノード {name} のつなぎ方が循環しています (または循環の先です)",
+                "error", "cycle", f"ノード {name} のつなぎ方が循環しています",
+                node=name, location="inputs"
+            ))
+        else:
+            analysis.issues.append(Issue(
+                "warning", "after_cycle",
+                f"ノード {name} は循環の先にあるので計算できません",
                 node=name, location="inputs"
             ))
 
     return order
+
+
+def in_cycle(analysis: Analysis, name: str, left: set[str]) -> bool:
+    """
+    ノードが, 前のノードをたどって自分に戻ってくる (循環に入る) かを返す関数
+
+    Parameters
+    ----------
+    analysis: Analysis
+        解析の結果 (つなぎ先)
+    name: str
+        ノードの名前
+    left: set[str]
+        計算の順に入らなかったノードの名前 (この中だけをたどる)
+
+    Returns
+    ----------
+    cyclic: bool
+        自分に戻ってくれば True
+    """
+    # 前のノードを深さ優先でたどり, 自分に着くかを確認
+    stack = [dep for dep in dependencies(analysis, name) if dep in left]
+    seen: set[str] = set()
+    cyclic = False
+    while stack:
+        current = stack.pop()
+        if current == name:
+            cyclic = True
+            break
+        if current in seen:
+            continue
+        seen.add(current)
+        stack.extend(
+            dep for dep in dependencies(analysis, current) if dep in left
+        )
+
+    return cyclic
+
+
+def suggest(name: str, candidates: list[str]) -> str:
+    """
+    書き間違いの近い候補を, 誤りの文に付ける文字にする関数
+
+    Parameters
+    ----------
+    name: str
+        書いた名前
+    candidates: list[str]
+        正しい名前の候補
+
+    Returns
+    ----------
+    hint: str
+        「 (もしかして: nn.Linear)」のような文字, 近い候補が無ければ空
+    """
+    # 大文字と小文字を区別せずに比べ, 元の綴りで返す
+    lowered = {candidate.lower(): candidate for candidate in candidates}
+    close = difflib.get_close_matches(
+        name.lower(), list(lowered), n=3, cutoff=0.7
+    )
+    hint = (
+        f" (もしかして: {', '.join(lowered[item] for item in close)})"
+        if close else ""
+    )
+
+    return hint
 
 
 def check_unused(
@@ -830,8 +922,13 @@ def check_unused(
     outputs = spec.get("outputs")
     if not isinstance(outputs, dict):
         outputs = {}
+    # 誤りのあるノード (つなぎ先を読めないことがある) からもたどり, その
+    # 前のノードに出力に届かない注意を重ねない
     stack = [
         parse_ref(ref)[0] for ref in outputs.values() if isinstance(ref, str)
+    ] + [
+        str(issue.node) for issue in analysis.issues
+        if issue.severity == "error" and issue.node is not None
     ]
     used: set[str] = set()
     while stack:
