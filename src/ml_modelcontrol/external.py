@@ -177,20 +177,33 @@ def load_geometric_units() -> None:
     ----------
     None
     """
-    # ライブラリが無い場合は理由付きで使えない部品にして終了
-    if not has_module("torch_geometric"):
-        for name in GEOMETRIC_COMMON:
-            register(UnitSpec(
-                name=f"pyg.{name}", category="graph", source="torch_geometric",
-                available=False,
-                reason="PyTorch Geometric (torch_geometric) が入っていません"
-            ))
-        return
-
+    # ライブラリが無いか読み込めない場合は, 理由付きで使えない部品にして終了
     # 読み込みの警告 (PyTorch の古い機能の案内など) は表示しない
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        geometric = importlib.import_module("torch_geometric.nn")
+    reason = "PyTorch Geometric (torch_geometric) が入っていません"
+    geometric = None
+    if has_module("torch_geometric"):
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                geometric = importlib.import_module("torch_geometric.nn")
+        except Exception as error:
+            reason = (
+                "PyTorch Geometric を読み込めません: "
+                f"{type(error).__name__}: {error}"
+            )
+    if geometric is None:
+        for name in GEOMETRIC_COMMON:
+            spec = UnitSpec(
+                name=f"pyg.{name}", category="graph",
+                source="torch_geometric", available=False, reason=reason
+            )
+            apply_notes(spec, {
+                "description": GEOMETRIC_NOTES.get(name, {}).get(
+                    "description", ""
+                )
+            })
+            register(spec)
+        return
     groups = [
         ("graph_conv", geometric.conv), ("graph_aggr", geometric.aggr),
         ("graph_norm", geometric.norm)
@@ -204,7 +217,10 @@ def load_geometric_units() -> None:
                 or name.startswith("Hetero")
             ):
                 continue
-            register_geometric_unit(cls, category)
+            try:
+                register_geometric_unit(cls, category)
+            except Exception:
+                continue
 
 
 def register_geometric_unit(cls: type, category: str) -> UnitSpec:
@@ -254,12 +270,23 @@ def register_geometric_unit(cls: type, category: str) -> UnitSpec:
     )
     apply_notes(spec, GEOMETRIC_NOTES.get(cls.__name__, {}))
 
-    # 別の部品を引数に取るクラス (GINConv など) は今は対象外
+    # 別の部品やテンソルを引数に取るクラス (GINConv, PNAConv など) と,
+    # 辞書の入力を取るクラス (異種グラフの層) は今は対象外
     if needs_module(cls):
         spec.available = False
         spec.reason = (
-            "引数に別の部品 (nn.Module) が必要なので, 今は定義から作れません"
+            "引数に別の部品 (nn.Module) かテンソルが必要なので, 今は定義から"
+            "作れません"
         )
+    if any(port.name.endswith("_dict") for port in inputs):
+        spec.available = False
+        spec.reason = "辞書の入力 (異種グラフ) は, 今は定義からつなげません"
+
+    # 他の口の後ろの *args は省略できる口 (追加の値)
+    if len(inputs) > 1:
+        for port in inputs:
+            if port.variadic:
+                port.optional = True
     register(spec)
 
     return spec

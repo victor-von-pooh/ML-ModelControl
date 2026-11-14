@@ -296,7 +296,10 @@ def needs_module(cls: type) -> bool:
         text = str(annotation)
         if (
             inspect.isclass(annotation) and issubclass(annotation, nn.Module)
-        ) or "Module" in text or "Callable" in text:
+        ) or any(
+            word in text
+            for word in ("Module", "Callable", "MessagePassing", "Tensor")
+        ):
             needed = True
 
     return needed
@@ -386,10 +389,17 @@ def ports_from_forward(cls: type) -> tuple[list[PortSpec], list[ParamSpec]]:
         positional = before_varargs or (
             parameter.kind is inspect.Parameter.POSITIONAL_ONLY
         )
-        # 既定値が None でも, テンソル以外の型ヒント (bool, list[int] など)
-        # を持つ引数は設定の値
-        flag = parameter.annotation is not inspect.Parameter.empty and (
-            "Tensor" not in str(parameter.annotation)
+        # 既定値が None でも, 値の型ヒント (bool, int, list[int] など) を
+        # 持ちテンソルを含まない引数は設定の値
+        text = str(parameter.annotation)
+        flag = (
+            parameter.annotation is not inspect.Parameter.empty
+            and "Tensor" not in text
+            and any(
+                word in text
+                for word in ("bool", "int", "float", "str", "list", "tuple",
+                             "Tuple", "List")
+            )
         )
         if parameter.default is inspect.Parameter.empty:
             ports.append(PortSpec(name=name, positional=positional))

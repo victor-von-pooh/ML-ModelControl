@@ -25,6 +25,18 @@ class SpecError(ValueError):
         self.issues = issues
 
 
+class NodeBuildError(ValueError):
+    def __init__(self, node: str, error: Exception):
+        # 親クラスのコンストラクタを呼び出す
+        super(NodeBuildError, self).__init__(
+            f"ノード {node} の部品を作れません: {type(error).__name__}: {error}"
+        )
+
+        # 作れなかったノードの名前と元のエラーを保存
+        self.node = node
+        self.error = error
+
+
 def to_arg(value: Any) -> Any:
     """
     定義の引数の値 (JSON の値) を, 部品に渡す値に直す関数
@@ -63,13 +75,14 @@ def follow_path(value: Any, path: list) -> Any:
     item: Any
         取り出した値
     """
-    # 番号は要素, 名前は辞書ならキー, それ以外は属性
+    # 番号は要素, 名前は辞書ならキー (無いキーは None. Hugging Face の出力は
+    # モデルによって pooler_output などを持たない), それ以外は属性
     item = value
     for step in path:
         if isinstance(step, int):
             item = item[step]
         elif isinstance(item, dict):
-            item = item[step]
+            item = item.get(step)
         else:
             item = getattr(item, step)
 
@@ -90,7 +103,10 @@ class GraphModel(nn.Module):
                 key: to_arg(value)
                 for key, value in (node.get("params") or {}).items()
             }
-            self.nodes[name] = analysis.units[name].builder(**params)
+            try:
+                self.nodes[name] = analysis.units[name].builder(**params)
+            except Exception as error:
+                raise NodeBuildError(name, error) from error
 
         # 計算の順, 入力と出力の名前, つなぎ先, 口の順, 設定の値を保存
         self.order = list(analysis.order)

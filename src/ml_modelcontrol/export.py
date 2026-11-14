@@ -22,11 +22,9 @@ def var_name(name: str) -> str:
     Returns
     ----------
     var: str
-        変数の名前 (読み込むモジュールなどと重なる場合は末尾に _)
+        変数の名前 (重なる名前は check_names でエラーにするので同じ名前)
     """
-    var = f"{name}_" if name in RESERVED_VARS or keyword.iskeyword(name) else (
-        name
-    )
+    var = name
 
     return var
 
@@ -88,15 +86,21 @@ def export_python(
     if not class_name.isidentifier() or keyword.iskeyword(class_name):
         raise ValueError(f"クラスの名前 {class_name!r} は識別子にしてください")
 
-    # 読み込むモジュール, 部品の作成, 計算の行を組み立て
-    imports = ["import torch", "from torch import nn"]
+    # 読み込むモジュールと, 名前の重なりの確認
+    imports = ["from torch import nn"]
     for name in analysis.order:
         line = analysis.units[name].code_import
         if line and line not in imports:
             imports.append(line)
+    check_names(spec, analysis, class_name)
+
+    # モデルの名前は文字の値として書き, コードとして解釈されないようにする
+    title = (
+        f"{spec.get('name', class_name)} のモデル (ML-ModelControl の定義から"
+        "書き出したコード)"
+    )
     lines = [
-        f'"""{spec.get("name", class_name)} のモデル (ML-ModelControl の定義から'
-        '書き出したコード)"""',
+        repr(title),
         *imports, "", "",
         f"class {class_name}(nn.Module):",
         "    def __init__(self):",
@@ -115,6 +119,58 @@ def export_python(
         Path(path).write_text(code, encoding="utf-8")
 
     return code
+
+
+def check_names(spec: dict, analysis: Any, class_name: str) -> None:
+    """
+    書き出すコードで名前が重ならないことを確かめる関数
+
+    入力とノードの名前, クラスの名前が, 読み込むモジュールやクラスの名前と
+    重なる場合と, 同じ名前の別のクラスを読み込む場合はエラーにする
+
+    Parameters
+    ----------
+    spec: dict
+        モデルの定義
+    analysis: Any
+        定義の解析の結果
+    class_name: str
+        書き出すクラスの名前
+
+    Returns
+    ----------
+    None
+    """
+    # 読み込む名前 (nn, ops, 部品のクラス) と, 予約した変数の名前
+    imported: dict[str, str] = {"nn": "torch.nn"}
+    for name in analysis.order:
+        unit = analysis.units[name]
+        code_name = unit.code_name.split(".")[0]
+        if "<locals>" in unit.code_import or "__main__" in unit.code_import:
+            raise ValueError(
+                f"部品 {unit.name} は関数の中か実行したスクリプトで定義した"
+                "クラスなので, 読み込むコードを書き出せません"
+            )
+        if imported.get(code_name, unit.code_import) != unit.code_import and (
+            code_name not in ("nn", "ops")
+        ):
+            raise ValueError(
+                f"同じ名前 {code_name} の別のクラスを読み込むので書き出せません"
+            )
+        imported.setdefault(code_name, unit.code_import)
+    reserved = RESERVED_VARS | set(imported)
+    for name in [*spec["inputs"], *analysis.order]:
+        if name in reserved:
+            raise ValueError(
+                f"名前 {name} は書き出すコードで使う名前と重なるので, 変えて"
+                "ください"
+            )
+    if class_name in reserved or class_name in spec["inputs"] or (
+        class_name in analysis.order
+    ):
+        raise ValueError(
+            f"クラスの名前 {class_name} は他の名前と重なるので使えません"
+        )
 
 
 def build_code(spec: dict, analysis: Any, name: str) -> str:

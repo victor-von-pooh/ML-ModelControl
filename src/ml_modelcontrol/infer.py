@@ -5,7 +5,7 @@ from typing import Any, Optional, Union
 import torch
 from torch import nn
 
-from ml_modelcontrol.model import GraphModel, follow_path
+from ml_modelcontrol.model import GraphModel, NodeBuildError, follow_path
 from ml_modelcontrol.spec import load_spec
 from ml_modelcontrol.validate import Analysis, Issue, analyze
 
@@ -170,7 +170,14 @@ def infer(
         しなかったか)
     """
     # 定義の誤りがある場合と, 形の無い入力がある場合は計算なし
+    # Hugging Face のモデルは重みを読まずに設定だけから作成 (形は同じで,
+    # 大きな重みの取得と読み込みを避けるため)
     spec = load_spec(spec)
+    for node in (spec.get("nodes") or {}).values():
+        if isinstance(node, dict) and str(node.get("unit", "")).startswith(
+            "hf."
+        ) and isinstance(node.get("params"), dict):
+            node["params"]["pretrained"] = False
     analysis = analyze(spec)
     result: dict = {
         "ok": False, "issues": [vars(issue) for issue in analysis.issues],
@@ -198,9 +205,23 @@ def infer(
         )))
 
     # cpu で組み立て, 入力の例をノードごとに計算
+    # 部品を作れない場合 (引数の組み合わせの誤りなど) はそのノードのエラー
     with torch.device("cpu"), torch.random.fork_rng(devices=[]):
         torch.manual_seed(0)
-        model = GraphModel(spec, analysis)
+        try:
+            model = GraphModel(spec, analysis)
+        except NodeBuildError as error:
+            result["nodes"] = {
+                name: {
+                    "status": "error" if name == error.node else "skipped",
+                    "outputs": {}, "params": 0, "trainable": 0,
+                    "error": str(error) if name == error.node else (
+                        f"ノード {error.node} の部品を作れないので計算しません"
+                    )
+                }
+                for name in analysis.order
+            }
+            return result
         model.eval()
         run_nodes(model, spec, result)
 

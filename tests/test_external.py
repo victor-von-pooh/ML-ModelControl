@@ -175,3 +175,77 @@ outputs:
     names = [param.name for param in get_unit("hf.AutoModel").params]
     assert "trust_remote_code" not in names
     assert {"hf.AutoModel"} <= {unit["name"] for unit in describe_units()}
+
+
+def test_review_fixes_external(tmp_path: Path) -> None:
+    """
+    書き出しの名前の扱い, 部品を作れない場合の形の推定, プーラーの無い
+    Hugging Face のモデルを確かめる関数
+
+    Parameters
+    ----------
+    tmp_path: Path
+        pytest が用意する一時ディレクトリ
+
+    Returns
+    ----------
+    None
+    """
+    # モデルの名前はコードとして解釈されない
+    spec = make_spec()
+    spec["name"] = 'a"""\nPWNED = 1\n"""'
+    namespace: dict = {}
+    exec(compile(export_python(spec), "<exported>", "exec"), namespace)
+    assert "PWNED" not in namespace
+
+    # 読み込む名前と重なるノードとクラスの名前は書き出さない
+    spec = make_spec()
+    spec["nodes"]["nn"] = spec["nodes"].pop("act")
+    spec["nodes"]["add"]["inputs"] = {"xs": ["x", "nn"]}
+    with pytest.raises(ValueError, match="重なる"):
+        export_python(spec)
+    with pytest.raises(ValueError, match="重なる"):
+        export_python(make_spec(), class_name="nn")
+
+    # 確認は通るが作れない引数 (割り切れないヘッドの数) は, そのノードの
+    # エラー
+    spec = make_spec("""
+inputs:
+  q: {shape: [2, 4, 6]}
+nodes:
+  fc: {unit: nn.Linear, params: {in_features: 6, out_features: 6}, inputs: q}
+  att:
+    unit: nn.MultiheadAttention
+    params: {embed_dim: 6, num_heads: 4, batch_first: true}
+    inputs: {query: fc, key: fc, value: fc}
+outputs:
+  y: "att:output"
+""")
+    result = infer(spec)
+    assert not result["ok"]
+    assert result["nodes"]["att"]["status"] == "error"
+    assert result["nodes"]["fc"]["status"] == "skipped"
+
+    # プーラーの無いモデルも, last_hidden_state の形を推定できる
+    transformers = pytest.importorskip("transformers")
+    config = transformers.DistilBertConfig(
+        vocab_size=50, dim=8, n_layers=1, n_heads=2, hidden_dim=16
+    )
+    transformers.DistilBertModel(config).save_pretrained(tmp_path)
+    spec = make_spec(f"""
+inputs:
+  ids: {{shape: [2, 5], dtype: int64}}
+nodes:
+  bert:
+    unit: hf.AutoModel
+    params: {{model_name: "{tmp_path}", local_files_only: true}}
+    inputs: {{input_ids: ids}}
+outputs:
+  y: "bert:last_hidden_state"
+""")
+    result = infer(spec)
+    assert result["ok"], result
+    assert result["nodes"]["bert"]["outputs"]["pooler_output"] == {
+        "kind": "none"
+    }
+    assert "unchecked_model" in {issue["code"] for issue in validate(spec)}
