@@ -174,13 +174,19 @@ CLASS_NOTES: dict[str, dict] = {
     "audio.AmplitudeToDB": {"description": "振幅か強さをデシベルにする"},
     "einops.Rearrange": {
         "description": (
-            "式で次元を並べ替える (例: 'b c h w -> b (h w) c'). 大きさは "
-            "extra の引数 (h=2 など) で渡す"
+            "式で次元を並べ替える (例: 'b c h w -> b (h w) c'). 式の中の "
+            "大きさは, 一覧に無い引数 (h=2 など) で渡す"
         )
     },
     "einops.Reduce": {
         "description": "式で次元をまとめる (例: 'b c h w -> b c', "
-                       "reduction='mean')"
+                       "reduction='mean')",
+        "params": {
+            "reduction": {
+                "description": "まとめ方",
+                "choices": ["mean", "sum", "max", "min", "prod"]
+            }
+        }
     },
     "einops.EinMix": {
         "description": "式で重みを掛けて次元を混ぜる (全結合の一般化)"
@@ -649,6 +655,24 @@ def load_timm_models() -> None:
             ParamSpec(
                 "in_chans", "int", None, minimum=1,
                 description="入力のチャンネル数 (空なら 3)"
+            ),
+            ParamSpec(
+                "features_only", "bool", False,
+                description=(
+                    "途中の特徴量のリストを返すか (検出や領域分割の符号化器に"
+                    "使う)"
+                )
+            ),
+            ParamSpec(
+                "out_indices", "any", None,
+                description=(
+                    "features_only の場合に返す段の番号のリスト (例: [1, 2, 3]."
+                    " 空なら全て)"
+                )
+            ),
+            ParamSpec(
+                "drop_rate", "float", None, minimum=0.0, maximum=1.0,
+                description="分類の層の前のドロップアウトの確率 (空なら 0)"
             )
         ],
         inputs=[PortSpec("x", "画像 (バッチ, チャンネル, 高さ, 幅)")],
