@@ -91,6 +91,113 @@ class UnitSpec:
 REGISTRY: dict[str, UnitSpec] = {}
 
 
+# 手で説明を書いていない引数の, 名前ごとの説明 (多くの層とライブラリで
+# 同じ意味の引数)
+PARAM_DESCRIPTIONS = {
+    "in_channels": "入力のチャンネル数",
+    "out_channels": "出力のチャンネル数",
+    "in_features": "入力の特徴量の数",
+    "out_features": "出力の特徴量の数",
+    "in1_features": "1 つ目の入力の特徴量の数",
+    "in2_features": "2 つ目の入力の特徴量の数",
+    "kernel_size": "カーネルの大きさ (整数か次元ごとのリスト)",
+    "stride": "ずらす幅 (整数か次元ごとのリスト)",
+    "padding": "端に足す幅 (整数か次元ごとのリスト, 畳み込みは same も可)",
+    "output_padding": "出力の片側に足す幅 (転置畳み込みの大きさの調整)",
+    "dilation": "カーネルの要素の間隔",
+    "groups": "チャンネルを分けるグループの数 (入力と出力のチャンネル数を割り"
+              "切る)",
+    "bias": "バイアスを足すか",
+    "padding_mode": "端を埋める値の作り方",
+    "inplace": "入力を書き換えて計算するか (メモリを減らす)",
+    "eps": "割り算を安定させる小さな数",
+    "momentum": "平均と分散の移動平均の割合 (null なら累積平均)",
+    "affine": "学習する倍率とずれを持つか",
+    "track_running_stats": "推論に使う平均と分散を記録するか",
+    "num_features": "特徴量 (チャンネル) の数",
+    "ceil_mode": "出力の大きさの計算で切り上げるか",
+    "return_indices": "最大値の位置も返すか",
+    "count_include_pad": "平均に端に足した 0 も含めるか",
+    "divisor_override": "平均の割る数 (null なら要素の数)",
+    "output_size": "出力の大きさ (整数か次元ごとのリスト)",
+    "output_ratio": "出力の大きさの入力に対する割合",
+    "p": "確率 (ドロップアウトでは 0 にする確率)",
+    "dim": "計算する次元",
+    "size": "出力の大きさ",
+    "scale_factor": "大きさの倍率",
+    "mode": "計算の方法",
+    "norm_type": "ノルムの p",
+    "alpha": "係数 alpha",
+    "beta": "係数 beta",
+    "value": "埋める値か置き換える値",
+    "dropout": "ドロップアウトの確率",
+    "batch_first": "入力と出力を (バッチ, 系列, 特徴量) の順にするか",
+    "input_size": "入力の特徴量の数",
+    "hidden_size": "隠れ状態の大きさ",
+    "dim_feedforward": "全結合の層の中間の大きさ",
+    "activation": "活性化関数",
+    "layer_norm_eps": "層正規化の eps",
+    "norm_first": "注意と全結合の前に正規化するか (Pre-LN)",
+    "d_model": "埋め込みの大きさ",
+    "nhead": "注意のヘッドの数 (d_model を割り切る)",
+    "num_layers": "重ねる層の数",
+    "padding_idx": "埋め込みを 0 のままにする番号 (詰め物の単語など)",
+    "max_norm": "埋め込みのノルムの上限",
+    "scale_grad_by_freq": "勾配を単語の出現の回数で割るか",
+    "sparse": "勾配を疎なテンソルにするか",
+    "num_embeddings": "埋め込みの数 (語彙の大きさ)",
+    "embedding_dim": "埋め込みの大きさ",
+    "start_dim": "平らにする最初の次元",
+    "end_dim": "平らにする最後の次元",
+    "num_groups": "チャンネルを分けるグループの数",
+    "num_channels": "チャンネル数",
+    "elementwise_affine": "要素ごとの学習する倍率とずれを持つか",
+    "negative_slope": "負の側の傾き",
+    "min_val": "下限", "max_val": "上限",
+    "min_value": "下限", "max_value": "上限",
+    "threshold": "しきい値",
+    "lambd": "しきい値 lambda",
+    "k": "係数 k",
+    "approximate": "近似の方法 (tanh で近似するか)",
+    "add_bias_kv": "キーと値にバイアスの系列を足すか",
+    "add_zero_attn": "キーと値に 0 の系列を足すか",
+    "kdim": "キーの特徴量の数 (null なら embed_dim)",
+    "vdim": "値の特徴量の数 (null なら embed_dim)",
+    "num_heads": "注意のヘッドの数",
+    "embed_dim": "埋め込みの大きさ",
+    "num_parameters": "学習する傾きの数 (1 か チャンネル数)",
+    "init": "最初の値",
+    "upscale_factor": "解像度を上げる倍率",
+    "downscale_factor": "解像度を下げる倍率",
+    "unflattened_size": "分けた後の形",
+    "normalized_shape": "正規化する最後の次元の形",
+    "nonlinearity": "活性化関数",
+    "proj_size": "出力の射影の大きさ (0 なら射影しない)",
+    "bidirectional": "双方向にするか",
+    "lower": "傾きの下限", "upper": "傾きの上限",
+    "beta_softplus": "係数 beta",
+    "align_corners": "角の画素をそろえて補間するか",
+    "recompute_scale_factor": "倍率から大きさを計算し直すか"
+}
+
+def describe_params(spec: UnitSpec) -> None:
+    """
+    説明の無い引数に, 名前ごとの説明を付ける関数
+
+    Parameters
+    ----------
+    spec: UnitSpec
+        部品, その場で書き換える
+
+    Returns
+    ----------
+    None
+    """
+    for param in spec.params:
+        if not param.description:
+            param.description = PARAM_DESCRIPTIONS.get(param.name, "")
+
+
 def register(spec: UnitSpec) -> UnitSpec:
     """
     部品を登録簿に加える関数
