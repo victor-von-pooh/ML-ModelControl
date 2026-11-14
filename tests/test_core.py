@@ -724,9 +724,11 @@ outputs: {}
     assert result["nodes"]["fc"]["outputs"]["out"]["shape"] == [2, 3]
     assert result["params"] == 27
 
-    # 他の誤りもある場合は計算しない
+    # 引数の誤りのあるノードは, 確認の誤りの文を持つエラー
     spec["nodes"]["fc"]["params"]["out_features"] = 0
-    assert infer(spec)["nodes"] == {}
+    node = infer(spec)["nodes"]["fc"]
+    assert node["status"] == "error"
+    assert "out_features" in node["error"]
 
 
 def test_extra_param_names() -> None:
@@ -781,3 +783,46 @@ outputs:
         assert "invalid_param_name" in codes(spec)
     spec["nodes"]["s"]["params"] = {"gain": 1}
     assert codes(spec) == set()
+
+
+def test_partial_infer() -> None:
+    """
+    誤りのあるノードとその先だけを除き, 残りのノードの形を推定することを
+    確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # つないでいないノード (複製した直後など) と, 部品を作れないノード
+    spec = make_spec("""
+inputs:
+  x: {shape: [2, 8]}
+nodes:
+  fc: {unit: nn.Linear, params: {in_features: 8, out_features: 6}, inputs: x}
+  act: {unit: nn.ReLU, inputs: fc}
+  loose: {unit: nn.Linear, params: {in_features: 6, out_features: 2}}
+  att:
+    unit: nn.MultiheadAttention
+    params: {embed_dim: 6, num_heads: 4}
+    inputs: {query: act, key: act, value: act}
+  after: {unit: nn.ReLU, inputs: "att:output"}
+outputs:
+  y: act
+  z: after
+""")
+    result = infer(spec)
+    assert not result["ok"]
+    nodes = result["nodes"]
+    assert nodes["fc"]["status"] == "ok"
+    assert nodes["act"]["outputs"]["out"]["shape"] == [2, 6]
+    assert nodes["loose"]["status"] == "error"
+    assert nodes["att"]["status"] == "error"
+    assert nodes["after"]["status"] == "skipped"
+    assert result["outputs"]["y"]["shape"] == [2, 6]
+    assert "z" not in result["outputs"]
+    assert result["params"] == 54

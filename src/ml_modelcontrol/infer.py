@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -217,14 +218,22 @@ def infer(
         name for name, value in spec["inputs"].items()
         if not isinstance(value, dict) or value.get("shape") is None
     ]
-    # 出力が無いことだけが誤りの場合は, 組み立ての途中でも形を確かめられる
-    # ようにノードごとに計算 (全体の ok は False のまま)
+    # 組み立ての途中でも形を確かめられるように, 誤りのあるノードとその先
+    # だけを除いて計算 (全体の ok は False のまま). 出力が無いことと出力の
+    # つなぎ先の誤り以外の, ノードに付かない誤り (入力の形の書き方など) が
+    # ある場合は計算しない
     blocking = [
         issue for issue in analysis.issues
-        if issue.severity == "error" and issue.code != "no_outputs"
+        if issue.severity == "error" and issue.node is None
+        and issue.code != "no_outputs"
+        and not str(issue.location or "").startswith("outputs")
     ]
     if blocking or no_shape:
         return result
+    bad = {
+        str(issue.node): issue.message for issue in analysis.issues
+        if issue.severity == "error" and issue.node is not None
+    }
     for name, value in spec["inputs"].items():
         count = 1
         for size in value["shape"]:
@@ -240,7 +249,8 @@ def infer(
 
     # 先にパラメータ数を数え, 上限を超える場合は計算なし
     # 数えられない場合 (meta デバイスで作れない部品) は注意を加えて計算
-    estimate = estimate_params(spec, analysis)
+    usable, skipped = usable_analysis(analysis, bad)
+    estimate = estimate_params(spec, usable)
     if estimate is not None and estimate > max_params:
         result["params"] = estimate
         result["estimated_only"] = True
@@ -252,29 +262,82 @@ def infer(
         )))
 
     # cpu で組み立て, 入力の例をノードごとに計算
-    # 部品を作れない場合 (引数の組み合わせの誤りなど) はそのノードのエラー
+    # 部品を作れないノード (引数の組み合わせの誤りなど) は, そのノードの
+    # エラーにして除き, 組み立て直し
     with torch.device("cpu"), torch.random.fork_rng(devices=[]):
         torch.manual_seed(0)
-        try:
-            model = GraphModel(spec, analysis)
-        except NodeBuildError as error:
-            result["nodes"] = {
-                name: {
-                    "status": "error" if name == error.node else "skipped",
-                    "outputs": {}, "params": 0, "trainable": 0,
-                    "error": str(error) if name == error.node else (
-                        f"ノード {error.node} の部品を作れないので計算しません"
-                    )
-                }
-                for name in analysis.order
-            }
-            return result
+        while True:
+            try:
+                model = GraphModel(spec, usable)
+                break
+            except NodeBuildError as error:
+                bad[error.node] = str(error)
+                usable, skipped = usable_analysis(analysis, bad)
         model.eval()
         run_nodes(model, spec, result)
+
+    # 誤りのあるノードとその先のノードの結果
+    for name, message in bad.items():
+        if name in spec["nodes"]:
+            result["nodes"][name] = {
+                "status": "error", "outputs": {}, "params": 0,
+                "trainable": 0, "error": message
+            }
+    for name, cause in skipped.items():
+        result["nodes"][name] = {
+            "status": "skipped", "outputs": {}, "params": 0, "trainable": 0,
+            "error": f"前のノード {cause} が計算できません"
+        }
+    for name, ref in spec["outputs"].items():
+        target = str(ref).partition(":")[0]
+        if target in bad or target in skipped:
+            result["outputs"].pop(str(name), None)
     if not analysis.ok:
         result["ok"] = False
 
     return result
+
+
+def usable_analysis(
+    analysis: Analysis, bad: dict[str, str]
+) -> tuple[Analysis, dict[str, str]]:
+    """
+    誤りのあるノードとその先のノードを除いた, 計算できる部分の解析を作る
+    関数
+
+    Parameters
+    ----------
+    analysis: Analysis
+        定義の解析の結果
+    bad: dict[str, str]
+        誤りのあるノードの名前ごとの誤りの文
+
+    Returns
+    ----------
+    usable: Analysis
+        計算の順から除いた解析
+    skipped: dict[str, str]
+        除いた先のノードの名前ごとの, 計算できない前のノードの名前
+    """
+    # 計算の順に, つなぎ先に除いたノードがあれば除外
+    skipped: dict[str, str] = {}
+    order = []
+    for name in analysis.order:
+        if name in bad or name not in analysis.units:
+            continue
+        causes = [
+            target
+            for targets in analysis.connections.get(name, {}).values()
+            for target, _ in targets
+            if target in bad or target in skipped
+        ]
+        if causes:
+            skipped[name] = causes[0]
+            continue
+        order.append(name)
+    usable = replace(analysis, order=order)
+
+    return usable, skipped
 
 
 def run_nodes(model: GraphModel, spec: dict, result: dict) -> None:
