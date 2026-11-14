@@ -695,3 +695,35 @@ outputs:
     exported.load_state_dict(built.state_dict())
     x = torch.randn(2, 5, 32)
     assert torch.allclose(built(x), exported(x))
+
+
+def test_infer_without_outputs() -> None:
+    """
+    出力をまだ書いていない組み立ての途中でも, ノードごとの形を推定する
+    ことを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 出力が無いことは誤りのまま, ノードの形とパラメータ数は求める
+    spec = make_spec("""
+inputs:
+  x: {shape: [2, 8]}
+nodes:
+  fc: {unit: nn.Linear, params: {in_features: 8, out_features: 3}, inputs: x}
+outputs: {}
+""")
+    result = infer(spec)
+    assert not result["ok"]
+    assert "no_outputs" in {issue["code"] for issue in result["issues"]}
+    assert result["nodes"]["fc"]["outputs"]["out"]["shape"] == [2, 3]
+    assert result["params"] == 27
+
+    # 他の誤りもある場合は計算しない
+    spec["nodes"]["fc"]["params"]["out_features"] = 0
+    assert infer(spec)["nodes"] == {}
