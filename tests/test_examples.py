@@ -1,8 +1,11 @@
 import importlib.util
+import sys
 
 import pytest
+import torch
 
 from ml_modelcontrol import infer, list_examples, load_example, validate
+from ml_modelcontrol.infer import example_input
 
 
 @pytest.mark.parametrize(
@@ -61,3 +64,45 @@ def test_example_names() -> None:
     assert {"mlp", "cnn_classifier", "gcn_graph_classifier"} <= names
     with pytest.raises(KeyError):
         load_example("../pyproject")
+
+
+def test_standalone_export(monkeypatch: pytest.MonkeyPatch):
+    """
+    書き出したコードが, このライブラリを読み込めなくても同じ計算をすること
+    を確かめる関数 (演算のクラスを書き写すこと)
+
+    Parameters
+    ----------
+    monkeypatch: pytest.MonkeyPatch
+        読み込めないライブラリを作るための差し替え
+
+    Returns
+    ----------
+    None
+    """
+    from ml_modelcontrol import build_model, export_python, load_example
+
+    for name in ["residual_mlp", "lstm_classifier", "transformer_encoder"]:
+        spec = load_example(name)
+        code = export_python(spec)
+        assert "from ml_modelcontrol" not in code
+        assert "import ml_modelcontrol" not in code
+        model = build_model(spec, seed=0).eval()
+
+        # このライブラリを読み込めない状態で書き出したコードを実行
+        namespace: dict = {}
+        with monkeypatch.context() as patch:
+            patch.setitem(sys.modules, "ml_modelcontrol", None)
+            exec(code, namespace)
+        exported = namespace["Model"]().eval()
+        exported.load_state_dict(model.state_dict())
+        inputs = example_input(spec)
+        with torch.no_grad():
+            expected = model(**inputs)
+            actual = exported(**inputs)
+        assert torch.allclose(expected, actual)
+
+    # standalone=False は今までどおり読み込む
+    assert "from ml_modelcontrol import ops" in export_python(
+        load_example("residual_mlp"), standalone=False
+    )

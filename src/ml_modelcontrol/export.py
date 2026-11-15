@@ -1,3 +1,4 @@
+import inspect
 import keyword
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -76,9 +77,24 @@ PICK_CODE = [
 ]
 
 
+# このライブラリの部品のクラスを読み込む行 (単独で動くコードではクラスの
+# 定義を書き写して置き換える) と, 書き写したクラスが使う import の行
+OWN_IMPORTS = {
+    "from ml_modelcontrol import ops": (
+        "ml_modelcontrol.ops", ["import torch", "from typing import Any"]
+    ),
+    "from ml_modelcontrol.external import HuggingFaceModel": (
+        "ml_modelcontrol.external", [
+            "import importlib", "import torch",
+            "from typing import Any, Optional"
+        ]
+    )
+}
+
+
 def export_python(
     spec: Union[str, Path, dict], class_name: str = "Model",
-    path: Optional[Union[str, Path]] = None
+    path: Optional[Union[str, Path]] = None, standalone: bool = True
 ) -> str:
     """
     モデルの定義から, 同じ計算をする nn.Module のクラスの Python のコードを
@@ -95,6 +111,10 @@ def export_python(
         クラスの名前
     path: Optional[Union[str, Path]] = None
         保存先, None の場合は保存しない
+    standalone: bool = True
+        このライブラリを入れなくても動くコードにするか. 演算 (op.Add など)
+        と Hugging Face の部品のクラスの定義をコードに書き写す. False の
+        場合は ml_modelcontrol から読み込む
 
     Returns
     ----------
@@ -146,9 +166,18 @@ def export_python(
         f"{spec.get('name', class_name)} のモデル (ML-ModelControl の定義から"
         "書き出したコード)"
     )
+    # 単独で動くコードでは, このライブラリの部品のクラスを書き写し
+    copied: list[str] = []
+    renames: dict[str, str] = {}
+    if standalone:
+        imports, copied, renames = copy_own_classes(graphs, imports, names)
     lines = [repr(title), *imports]
+    for block in copied:
+        lines += ["", "", *block.splitlines()]
     for name, graph, graph_analysis in graphs:
-        lines += ["", "", *class_code(graph, graph_analysis, name)]
+        lines += [
+            "", "", *class_code(graph, graph_analysis, name, renames)
+        ]
     if any("_pick(" in line for line in lines):
         start = lines.index(f"class {graphs[0][0]}(nn.Module):")
         lines[start:start] = PICK_CODE
@@ -190,7 +219,67 @@ def used_units(spec: dict, analysis: Any) -> set[str]:
     return names
 
 
-def class_code(spec: dict, analysis: Any, class_name: str) -> list[str]:
+def copy_own_classes(
+    graphs: list, imports: list[str], class_names: list[str]
+) -> tuple[list[str], list[str], dict[str, str]]:
+    """
+    このライブラリの部品のクラスの読み込みを, クラスの定義の書き写しに
+    置き換える関数
+
+    Parameters
+    ----------
+    graphs: list
+        書き出すクラスの名前, 定義, 解析の組
+    imports: list[str]
+        読み込む行
+    class_names: list[str]
+        書き出すクラスの名前 (書き写すクラスとの重なりの確認)
+
+    Returns
+    ----------
+    imports: list[str]
+        このライブラリの読み込みを除き, 書き写したクラスが使う行を加えた
+        読み込む行
+    copied: list[str]
+        書き写したクラスの定義 (使う順)
+    renames: dict[str, str]
+        部品を作る式の名前の置き換え (ops.Add を Add に)
+    """
+    # 使う部品のクラスを, 読み込む行ごとに集める
+    copied: list[str] = []
+    renames: dict[str, str] = {}
+    needed: list[str] = []
+    for _, _, graph_analysis in graphs:
+        for name in graph_analysis.order:
+            unit = graph_analysis.units[name]
+            if unit.code_import not in OWN_IMPORTS:
+                continue
+            short = unit.code_name.split(".")[-1]
+            if short in class_names:
+                raise ValueError(
+                    f"部品のクラス {short} の名前が, 書き出すクラスの名前と "
+                    "重なります. クラスか部分モデルの名前を変えてください"
+                )
+            if unit.code_name not in renames:
+                module_name, extra = OWN_IMPORTS[unit.code_import]
+                module = __import__(module_name, fromlist=[short])
+                copied.append(inspect.getsource(getattr(module, short)))
+                renames[unit.code_name] = short
+                needed += [line for line in extra if line not in needed]
+
+    # このライブラリの読み込みを除き, 書き写したクラスが使う行を先頭に
+    kept = [line for line in imports if line not in OWN_IMPORTS]
+    imports = [
+        *[line for line in needed if line not in kept], *kept
+    ]
+
+    return imports, copied, renames
+
+
+def class_code(
+    spec: dict, analysis: Any, class_name: str,
+    renames: Optional[dict[str, str]] = None
+) -> list[str]:
     """
     1 つの定義 (本体か部分モデル) の nn.Module のクラスの行を作る関数
 
@@ -202,6 +291,8 @@ def class_code(spec: dict, analysis: Any, class_name: str) -> list[str]:
         定義の解析の結果
     class_name: str
         クラスの名前
+    renames: Optional[dict[str, str]] = None
+        部品を作る式の名前の置き換え (書き写したクラス)
 
     Returns
     ----------
@@ -218,8 +309,9 @@ def class_code(spec: dict, analysis: Any, class_name: str) -> list[str]:
         "        self.nodes = nn.ModuleDict({"
     ]
     for name in analysis.order:
+        code = analysis.units[name].code_name
         lines += wrap_call(
-            f"            {name!r}: {analysis.units[name].code_name}(",
+            f"            {name!r}: {(renames or {}).get(code, code)}(",
             build_args(spec, analysis, name), "),", "            "
         )
     lines.append("        })")
