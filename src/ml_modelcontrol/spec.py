@@ -102,8 +102,8 @@ def migrate(spec: dict) -> dict:
     ValueError
         ライブラリより新しい版の場合
     """
-    # 版の無い定義は今の版として扱い, 新しい版はエラー
-    version = spec.get("format_version", FORMAT_VERSION)
+    # 版の無い定義は版 1 として扱い (版を書く前の形), 新しい版はエラー
+    version = spec.get("format_version", 1)
     if not isinstance(version, int) or isinstance(version, bool):
         raise ValueError(f"format_version は整数にしてください: {version!r}")
     if version < 1:

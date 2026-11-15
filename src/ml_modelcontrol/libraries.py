@@ -243,8 +243,8 @@ def import_quietly(name: str) -> tuple[Any, str]:
     if not has_module(package):
         extra = EXTRAS.get(package, package)
         return None, (
-            f"{package} が入っていません (pip install "
-            f"\"ml-modelcontrol[{extra}]\")"
+            f"{package} が入っていません (pip install -e "
+            f"\".[{extra}]\")"
         )
     try:
         with warnings.catch_warnings():

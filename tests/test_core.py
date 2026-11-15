@@ -144,6 +144,11 @@ def test_spec_round_trip(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="format_version 99"):
         load_spec(spec)
 
+    # 版を書かない定義は版 1 として読む
+    unversioned = make_spec()
+    del unversioned["format_version"]
+    assert load_spec(unversioned)["format_version"] == 1
+
 
 def test_validate_reports_all_issues() -> None:
     """

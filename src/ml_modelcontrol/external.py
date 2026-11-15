@@ -225,8 +225,8 @@ def load_geometric_units() -> None:
     # ライブラリが無いか読み込めない場合は, 理由付きで使えない部品にして終了
     # 読み込みの警告 (PyTorch の古い機能の案内など) は表示しない
     reason = (
-        "PyTorch Geometric (torch_geometric) が入っていません (pip install "
-        "\"ml-modelcontrol[geometric]\")"
+        "PyTorch Geometric (torch_geometric) が入っていません (pip install -e "
+        "\".[geometric]\")"
     )
     geometric = None
     if has_module("torch_geometric"):
@@ -343,8 +343,8 @@ def load_huggingface_units() -> None:
             ],
             available=available,
             reason="" if available else (
-                "Hugging Face の transformers が入っていません (pip install "
-                "\"ml-modelcontrol[huggingface]\")"
+                "Hugging Face の transformers が入っていません (pip install -e "
+                "\".[huggingface]\")"
             ),
             builder=make_huggingface_builder(kind),
             code_name="HuggingFaceModel",
