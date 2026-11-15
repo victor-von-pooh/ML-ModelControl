@@ -637,9 +637,48 @@ def check_node(
         name, unit, node.get("forward_params"), "forward_params",
         unit.forward_params, issues
     )
+    check_combination(name, unit, node.get("params"), issues)
     analysis.connections[name] = check_connections(
         name, unit, node_inputs(node), input_names, nodes, issues
     )
+
+
+def check_combination(
+    name: str, unit: UnitSpec, params: Any, issues: list[Issue]
+) -> None:
+    """
+    部品ごとの引数の組み合わせの誤りを確かめる関数
+
+    学習済みの重みとクラスの数のように, 形の推定 (重みを読まない) では
+    分からず, 組み立てで失敗する組み合わせを前もって誤りにする
+
+    Parameters
+    ----------
+    name: str
+        ノードの名前
+    unit: UnitSpec
+        ノードの部品
+    params: Any
+        定義の params
+    issues: list[Issue]
+        誤りを加えるリスト
+
+    Returns
+    ----------
+    None
+    """
+    # 確かめる関数が無い部品と, 引数が辞書でない場合 (別の誤り) は対象外
+    if unit.checker is None or not isinstance(params, dict):
+        return
+    try:
+        found = unit.checker(params)
+    except Exception:
+        return
+    for location, message in found:
+        issues.append(Issue(
+            "error", "invalid_combination", message, node=name,
+            location=location
+        ))
 
 
 def check_connections(
@@ -1063,10 +1102,21 @@ def check_unused(
                 "warning", "unused_node",
                 f"ノード {name} は出力に届きません", node=str(name)
             ))
+    # 入力は, どこかのノードにつないでいれば出力に届かないことを伝える
+    referenced = {
+        target
+        for targets in analysis.connections.values()
+        for port_targets in targets.values()
+        for target, _ in port_targets
+    }
     for name in input_names:
         if name not in used:
+            message = (
+                f"入力 {name} はつないだ先が出力に届きません"
+                if name in referenced else f"入力 {name} は使われていません"
+            )
             analysis.issues.append(Issue(
-                "warning", "unused_input", f"入力 {name} は使われていません",
+                "warning", "unused_input", message,
                 location=f"inputs.{name}"
             ))
 
@@ -1486,7 +1536,8 @@ def describe_spec_units(spec: Union[str, Path, dict]) -> list[dict]:
             continue
         data = asdict(subgraphs.units[name])
         for key in (
-            "builder", "code_name", "code_import", "code_args", "offline"
+            "builder", "checker", "code_name", "code_import", "code_args",
+            "offline"
         ):
             data.pop(key)
         units.append(data)

@@ -620,7 +620,67 @@ def load_torchvision_models() -> None:
     )
     if models is not None:
         spec.builder = make_torchvision_builder(models)
+        spec.checker = make_torchvision_checker(models)
     register(spec)
+
+
+def make_torchvision_checker(
+    models: Any
+) -> Callable[[dict], list[tuple[str, str]]]:
+    """
+    tv.Model の学習済みの重みとクラスの数の組み合わせを確かめる関数を作る
+    関数
+
+    Parameters
+    ----------
+    models: Any
+        torchvision.models のモジュール
+
+    Returns
+    ----------
+    checker: Callable[[dict], list[tuple[str, str]]]
+        引数の値から, 誤りの場所と説明の組のリストを返す関数
+    """
+    def checker(params: dict) -> list[tuple[str, str]]:
+        """
+        学習済みの重みのクラスの数と num_classes が違う場合を誤りにする関数
+
+        Parameters
+        ----------
+        params: dict
+            tv.Model の引数の値
+
+        Returns
+        ----------
+        found: list[tuple[str, str]]
+            誤りの場所と説明の組 (誤りが無ければ空)
+        """
+        # 重みの情報 (ネットワークを使わずに読める) のクラスの数と比較
+        name = params.get("name")
+        weights = params.get("weights")
+        classes = params.get("num_classes")
+        if not isinstance(name, str) or not isinstance(weights, str) or (
+            classes is None
+        ):
+            return []
+        try:
+            meta = models.get_model_weights(name)[weights].meta
+        except (KeyError, ValueError, AttributeError):
+            return []
+        expected = len(meta.get("categories") or [])
+        found = []
+        if expected and classes != expected:
+            found.append((
+                "params.num_classes",
+                f"学習済みの重み {weights} は {expected} クラスなので, "
+                f"num_classes を {classes} にできません. 重みを使う場合は "
+                "num_classes を空にして後ろに新しい全結合の層を置くか, 重みを"
+                "空にしてください"
+            ))
+
+        return found
+
+    return checker
 
 
 def load_timm_models() -> None:
