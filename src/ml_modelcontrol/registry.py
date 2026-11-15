@@ -482,7 +482,9 @@ def parse_doc_params(doc: str) -> dict[str, str]:
     descriptions = {}
     for name, parts in found.items():
         text = " ".join(" ".join(parts).split())
-        text = DOC_MATH_ROLE.sub(lambda match: plain_math(match.group(1)), text)
+        text = DOC_MATH_ROLE.sub(
+            lambda match: plain_math(match.group(1)), text
+        )
         text = DOC_ROLE.sub(r"\1", text).replace("``", "")
         if not text:
             continue
