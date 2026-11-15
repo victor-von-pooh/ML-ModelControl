@@ -1,5 +1,8 @@
+import importlib
 import inspect
 import keyword
+import re
+import warnings
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -77,17 +80,12 @@ PICK_CODE = [
 ]
 
 
-# このライブラリの部品のクラスを読み込む行 (単独で動くコードではクラスの
-# 定義を書き写して置き換える) と, 書き写したクラスが使う import の行
+# このライブラリの部品のクラスを読み込む行と, そのクラスのモジュール
+# (単独で動くコードではクラスの定義を書き写して置き換える)
 OWN_IMPORTS = {
-    "from ml_modelcontrol import ops": (
-        "ml_modelcontrol.ops", ["import torch", "from typing import Any"]
-    ),
+    "from ml_modelcontrol import ops": "ml_modelcontrol.ops",
     "from ml_modelcontrol.external import HuggingFaceModel": (
-        "ml_modelcontrol.external", [
-            "import importlib", "import torch",
-            "from typing import Any, Optional"
-        ]
+        "ml_modelcontrol.external"
     )
 }
 
@@ -223,8 +221,11 @@ def copy_own_classes(
     graphs: list, imports: list[str], class_names: list[str]
 ) -> tuple[list[str], list[str], dict[str, str]]:
     """
-    このライブラリの部品のクラスの読み込みを, クラスの定義の書き写しに
-    置き換える関数
+    このライブラリの部品の読み込みをクラスの定義の書き写しに置き換える関数
+
+    書き写すクラスが使う名前 (torch, Any, Optional, importlib) の import を
+    クラスの中身から決めて加える. クラスの中身を読めない環境 (ソースの無い
+    インストール) では, 書き写さずに読み込む行を残して注意を出す
 
     Parameters
     ----------
@@ -239,38 +240,79 @@ def copy_own_classes(
     ----------
     imports: list[str]
         このライブラリの読み込みを除き, 書き写したクラスが使う行を加えた
-        読み込む行
+        読み込む行 (標準ライブラリ, torch, その他の順)
     copied: list[str]
         書き写したクラスの定義 (使う順)
     renames: dict[str, str]
         部品を作る式の名前の置き換え (ops.Add を Add に)
+
+    Raises
+    ----------
+    ValueError
+        書き写すクラスの名前が, 書き出すクラスや読み込む名前と重なる場合
     """
-    # 使う部品のクラスを, 読み込む行ごとに集める
+    # 他の読み込む行が持ち込む名前 (from x import A の A, import x の x)
+    kept = [line for line in imports if line not in OWN_IMPORTS]
+    bound = {
+        name.strip().split(" as ")[-1]
+        for line in kept
+        for name in line.split(" import ", 1)[-1].split(",")
+    }
+
+    # 使う部品のクラスの書き写しと, 書き写したクラスが使う名前の収集
     copied: list[str] = []
     renames: dict[str, str] = {}
-    needed: list[str] = []
+    used: set[str] = set()
+    fallback: list[str] = []
     for _, _, graph_analysis in graphs:
         for name in graph_analysis.order:
             unit = graph_analysis.units[name]
             if unit.code_import not in OWN_IMPORTS:
                 continue
+            if unit.code_name in renames or unit.code_import in fallback:
+                continue
             short = unit.code_name.split(".")[-1]
-            if short in class_names:
-                raise ValueError(
-                    f"部品のクラス {short} の名前が, 書き出すクラスの名前と "
-                    "重なります. クラスか部分モデルの名前を変えてください"
+            module = importlib.import_module(OWN_IMPORTS[unit.code_import])
+            try:
+                source = inspect.getsource(getattr(module, short))
+            except (OSError, TypeError):
+                warnings.warn(
+                    f"{unit.code_name} のクラスの中身を読めないので, 書き出す"
+                    "コードは ml_modelcontrol を読み込みます", stacklevel=3
                 )
-            if unit.code_name not in renames:
-                module_name, extra = OWN_IMPORTS[unit.code_import]
-                module = __import__(module_name, fromlist=[short])
-                copied.append(inspect.getsource(getattr(module, short)))
-                renames[unit.code_name] = short
-                needed += [line for line in extra if line not in needed]
+                fallback.append(unit.code_import)
+                continue
+            if short in class_names or short in bound:
+                raise ValueError(
+                    f"部品のクラス {short} の名前が, 書き出すクラスか読み込む"
+                    "クラスの名前と重なります. 名前を変えるか, "
+                    "standalone=False で書き出してください"
+                )
+            copied.append(source)
+            renames[unit.code_name] = short
+            used |= {
+                word for word in ("importlib", "torch", "Any", "Optional")
+                if re.search(rf"\b{word}\b", source)
+            }
 
-    # このライブラリの読み込みを除き, 書き写したクラスが使う行を先頭に
-    kept = [line for line in imports if line not in OWN_IMPORTS]
+    # 書き写したクラスが使う名前と, 書き出すクラスの名前の重なりの確認
+    overlap = used & set(class_names)
+    if overlap:
+        raise ValueError(
+            f"クラスの名前 {sorted(overlap)} は, 書き写した部品のクラスが使う"
+            "名前と重なるので使えません"
+        )
+
+    # 標準ライブラリ, torch, その他の順の読み込む行
+    standard = ["import importlib"] if "importlib" in used else []
+    typing_names = [name for name in ("Any", "Optional") if name in used]
+    if typing_names:
+        standard.append(f"from typing import {', '.join(typing_names)}")
+    first = ["import torch"] if "torch" in used else []
+    # (標準ライブラリの後は 1 行空ける)
     imports = [
-        *[line for line in needed if line not in kept], *kept
+        *standard, *([""] if standard else []), *first,
+        *[line for line in imports if line in fallback], *kept
     ]
 
     return imports, copied, renames

@@ -66,7 +66,7 @@ def test_example_names() -> None:
         load_example("../pyproject")
 
 
-def test_standalone_export(monkeypatch: pytest.MonkeyPatch):
+def test_standalone_export(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     書き出したコードが, このライブラリを読み込めなくても同じ計算をすること
     を確かめる関数 (演算のクラスを書き写すこと)
@@ -80,7 +80,7 @@ def test_standalone_export(monkeypatch: pytest.MonkeyPatch):
     ----------
     None
     """
-    from ml_modelcontrol import build_model, export_python, load_example
+    from ml_modelcontrol import build_model, export_python
 
     for name in ["residual_mlp", "lstm_classifier", "transformer_encoder"]:
         spec = load_example(name)
@@ -106,3 +106,63 @@ def test_standalone_export(monkeypatch: pytest.MonkeyPatch):
     assert "from ml_modelcontrol import ops" in export_python(
         load_example("residual_mlp"), standalone=False
     )
+
+    # 書き写したクラスが使う名前だけを読み込む (使わない Any を読み込まない)
+    code = export_python(load_example("mlp"))
+    assert "import torch\n" not in code and "from typing" not in code
+    code = export_python(load_example("residual_mlp"))
+    assert "from typing" not in code
+
+
+def test_standalone_export_conflicts(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    書き写すクラスの名前の重なりと, 中身を読めない場合の扱いを確かめる関数
+
+    Parameters
+    ----------
+    monkeypatch: pytest.MonkeyPatch
+        中身を読めない状態を作るための差し替え
+
+    Returns
+    ----------
+    None
+    """
+    import inspect
+
+    from torch import nn
+
+    from ml_modelcontrol import export_python, register_unit
+
+    # 自作の部品のクラスと書き写す演算のクラスの名前が同じ場合はエラー
+    class Add(nn.Module):
+        def forward(self, x):
+            return x
+
+    Add.__module__ = "mypkg"
+    register_unit(Add, name="test_export.Add")
+    spec = {
+        "inputs": {"x": {"shape": [2, 3]}},
+        "nodes": {
+            "d": {"unit": "test_export.Add", "inputs": "x"},
+            "s": {"unit": "op.Add", "inputs": {"xs": ["x", "d"]}}
+        },
+        "outputs": {"y": "s"}
+    }
+    with pytest.raises(ValueError, match="Add"):
+        export_python(spec)
+
+    # 書き写したクラスが使う名前はクラスの名前に使えない
+    with pytest.raises(ValueError, match="torch"):
+        export_python(load_example("residual_mlp"), class_name="torch")
+
+    # 中身を読めない環境では, 注意を出して読み込む行を残す
+    def broken(value: object) -> str:
+        raise OSError("no source")
+
+    monkeypatch.setattr(inspect, "getsource", broken)
+    with pytest.warns(UserWarning, match="読めない"):
+        code = export_python(load_example("residual_mlp"))
+    assert "from ml_modelcontrol import ops" in code
+
