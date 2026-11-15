@@ -1258,3 +1258,41 @@ def test_error_shows_incoming_values():
     }
     error = infer(spec)["nodes"]["fc"]["error"]
     assert error.endswith("(入った値: input [4, 16] float32)")
+
+
+def test_error_shape_hints():
+    """
+    形と型の食い違いの誤りに, 日本語の直し方を添えることを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    spec = {
+        "inputs": {"x": {"shape": [4, 16]}, "i": {"shape": [2, 3, 8, 8]}},
+        "nodes": {
+            "fc": {
+                "unit": "nn.Linear", "inputs": "x",
+                "params": {"in_features": 8, "out_features": 2}
+            },
+            "emb": {
+                "unit": "nn.Embedding", "inputs": "x",
+                "params": {"num_embeddings": 10, "embedding_dim": 3}
+            },
+            "conv": {
+                "unit": "nn.Conv2d", "inputs": "i",
+                "params": {
+                    "in_channels": 1, "out_channels": 4, "kernel_size": 3
+                }
+            }
+        },
+        "outputs": {"y": "fc", "z": "emb", "w": "conv"}
+    }
+    nodes = infer(spec)["nodes"]
+    assert "最後の次元 16 と in_features 8 が合いません" in nodes["fc"]["error"]
+    assert "番号 (int64) を入れてください" in nodes["emb"]["error"]
+    assert "in_channels を 3 にする" in nodes["conv"]["error"]
