@@ -229,6 +229,9 @@ def describe_params(spec: UnitSpec, cls: Optional[type] = None) -> None:
     """
     # ライブラリごとに意味の違う名前は, docstring の説明を優先
     documented = docstring_params(cls) if cls is not None else {}
+    # 説明の無い部品は, docstring の最初の文 (ライブラリの言葉のまま)
+    if cls is not None and not spec.description:
+        spec.description = docstring_summary(cls)
     for param in spec.params:
         if param.description:
             continue
@@ -265,6 +268,47 @@ DOC_ROLE = re.compile(r":[A-Za-z]+:`~?([^`]*)`")
 
 # docstring から取り出す説明の文字数の上限
 DOC_MAX_LENGTH = 300
+
+
+# reST のリンク (`"題名" <URL>`_ や `題名 <URL>`_) と, 数式の書き方
+DOC_LINK = re.compile(r'`"?([^`<]*?)"?\s*<[^>]+>`_+')
+DOC_MATH = re.compile(r"\$[^$]*\$|:math:`[^`]*`")
+
+# docstring から取り出す部品の説明の文字数の上限
+DOC_SUMMARY_LENGTH = 160
+
+
+def docstring_summary(cls: type) -> str:
+    """
+    クラスの docstring の最初の文を, 部品の説明にする形で取り出す関数
+
+    Parameters
+    ----------
+    cls: type
+        nn.Module のクラス
+
+    Returns
+    ----------
+    summary: str
+        最初の段落の最初の文 (リンクと数式の書き方を除き, 長いものは切り
+        詰めたもの), docstring が無い場合は空
+    """
+    # nn.Module 自身の docstring を引き継いだだけのクラスは対象外
+    doc = cls.__doc__
+    if not isinstance(doc, str) or doc is nn.Module.__doc__:
+        return ""
+    paragraph = inspect.cleandoc(doc).split("\n\n")[0]
+    text = " ".join(paragraph.split())
+    text = DOC_LINK.sub(r"\1", text)
+    text = DOC_MATH.sub("", text)
+    text = DOC_ROLE.sub(r"\1", text).replace("``", "")
+    text = " ".join(text.split())
+    end = text.find(". ")
+    summary = text[:end + 1] if end >= 0 else text
+    if len(summary) > DOC_SUMMARY_LENGTH:
+        summary = summary[:DOC_SUMMARY_LENGTH - 1].rstrip() + "…"
+
+    return summary
 
 
 def docstring_params(cls: type) -> dict[str, str]:
