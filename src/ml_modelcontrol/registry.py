@@ -267,8 +267,9 @@ def docstring_params(cls: type) -> dict[str, str]:
     """
     クラスの docstring から引数ごとの説明を取り出す関数
 
-    クラスと __init__ の docstring を読む. Google 形式 (Args:), NumPy 形式 (Parameters と下線), Sphinx 形式
-    (:param name:) を読む. 読めない書き方の引数は含めない
+    クラスと __init__ の docstring の, Google 形式 (Args:), NumPy 形式
+    (Parameters と下線), Sphinx 形式 (:param name:) を読む. 読めない
+    書き方の引数は含めない
 
     Parameters
     ----------
