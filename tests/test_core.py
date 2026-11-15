@@ -1142,3 +1142,51 @@ def test_docstring_params():
     assert [param.description for param in spec.params] == [
         "入力のチャンネル数", "number of layers."
     ]
+
+
+def test_unused_input_message_and_combination():
+    """
+    出力に届かない入力の注意の文と, tv.Model の重みとクラスの数の組み合わせ
+    の誤りを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # つないだ先が出力に届かない入力と, どこにもつながない入力
+    spec = {
+        "inputs": {"x": {"shape": [2, 4]}, "z": {"shape": [2, 4]}},
+        "nodes": {"a": {"unit": "nn.ReLU", "inputs": "x"}},
+    }
+    messages = {
+        issue["location"]: issue["message"] for issue in validate(spec)
+        if issue["code"] == "unused_input"
+    }
+    assert messages == {
+        "inputs.x": "入力 x はつないだ先が出力に届きません",
+        "inputs.z": "入力 z は使われていません"
+    }
+
+    # 学習済みの重みのクラスの数と違う num_classes は誤り
+    if not get_unit("tv.Model").available:
+        return
+    spec = {
+        "inputs": {"x": {"shape": [2, 3, 32, 32]}},
+        "nodes": {"m": {
+            "unit": "tv.Model", "inputs": "x",
+            "params": {
+                "name": "resnet18", "weights": "DEFAULT", "num_classes": 10
+            }
+        }},
+        "outputs": {"y": "m"}
+    }
+    codes = [issue["code"] for issue in validate(spec)]
+    assert "invalid_combination" in codes
+    spec["nodes"]["m"]["params"]["weights"] = None
+    assert "invalid_combination" not in [
+        issue["code"] for issue in validate(spec)
+    ]

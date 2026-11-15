@@ -82,6 +82,10 @@ class UnitSpec:
     # 引数の値から nn.Module を作る関数 (一覧の表示には含めない)
     builder: Optional[Callable[..., nn.Module]] = None
 
+    # 引数の組み合わせの誤り (場所と説明の組) を返す関数 (部品ごとの確認.
+    # 一覧の表示には含めない)
+    checker: Optional[Callable[[dict], list[tuple[str, str]]]] = None
+
     # 書き出す Python のコードで, 作る式に使う名前 (nn.Linear など)
     code_name: str = ""
     code_import: str = ""
@@ -487,7 +491,8 @@ def describe_units() -> list[dict]:
     for name in sorted(REGISTRY):
         data = asdict(REGISTRY[name])
         for key in (
-            "builder", "code_name", "code_import", "code_args", "offline"
+            "builder", "checker", "code_name", "code_import", "code_args",
+            "offline"
         ):
             data.pop(key)
         units.append(data)
