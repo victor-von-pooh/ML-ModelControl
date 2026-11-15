@@ -1123,6 +1123,11 @@ def test_docstring_params():
         "a": "If True, uses x."
     }
 
+    # 数式は命令と波括弧を除いた読める文字
+    assert parse_doc_params(
+        "Args:\n    a: computes :math:`\\mathbf{\\hat{A}} + 2\\mathbf{I}`."
+    ) == {"a": "computes A + 2I."}
+
     # 名前ごとの説明があればそれ, 無ければ docstring
     class Documented(nn.Module):
         """
