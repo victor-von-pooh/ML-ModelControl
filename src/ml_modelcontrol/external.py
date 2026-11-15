@@ -224,7 +224,10 @@ def load_geometric_units() -> None:
     """
     # ライブラリが無いか読み込めない場合は, 理由付きで使えない部品にして終了
     # 読み込みの警告 (PyTorch の古い機能の案内など) は表示しない
-    reason = "PyTorch Geometric (torch_geometric) が入っていません"
+    reason = (
+        "PyTorch Geometric (torch_geometric) が入っていません (pip install "
+        "\"ml-modelcontrol[geometric]\")"
+    )
     geometric = None
     if has_module("torch_geometric"):
         try:
