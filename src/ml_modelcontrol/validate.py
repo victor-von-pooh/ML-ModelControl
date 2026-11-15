@@ -1187,10 +1187,12 @@ def class_name_of(name: str) -> str:
     class_name: str
         ResBlock のような名前
     """
+    # 識別子にならない名前 (数字で始まるもの) と予約語 (None など) は頭を
+    # 付けた名前
     parts = [part for part in name.split("_") if part]
-    class_name = "".join(
-        part[:1].upper() + part[1:] for part in parts
-    ) or "Subgraph"
+    class_name = "".join(part[:1].upper() + part[1:] for part in parts)
+    if not class_name.isidentifier() or keyword.iskeyword(class_name):
+        class_name = f"Subgraph{class_name}"
 
     return class_name
 
@@ -1275,7 +1277,12 @@ class Subgraphs:
         inner: list[Issue] = []
         self.stack.append(name)
         try:
+            # 部分モデルの名前は書き出すコードではクラスの名前になるので,
+            # 書き出す変数の名前との重なりは注意しない
             check_name(name, "部分モデル", inner, node=False)
+            inner[:] = [
+                issue for issue in inner if issue.code != "export_name"
+            ]
             if not isinstance(spec, dict):
                 inner.append(Issue(
                     "error", "invalid_subgraph",
@@ -1304,8 +1311,9 @@ class Subgraphs:
         errors = [issue for issue in inner if issue.severity == "error"]
         inputs = spec.get("inputs") if isinstance(spec, dict) else None
         outputs = spec.get("outputs") if isinstance(spec, dict) else None
+        # 入力の口は定義の入力の順に位置で渡す (self などの名前でも渡せる)
         input_ports = [
-            PortSpec(name=str(key), description=str(
+            PortSpec(name=str(key), positional=True, description=str(
                 (value or {}).get("description", "")
                 if isinstance(value, dict) or value is None else ""
             ))

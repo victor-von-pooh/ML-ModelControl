@@ -131,13 +131,15 @@ def export_python(
             )
 
     # 読み込むモジュールと, 名前の重なりの確認
+    # (同じ名前の別のクラスは, クラスをまたいでも確認)
     imports = ["from torch import nn"]
+    imported: dict[str, str] = {"nn": "torch.nn"}
     for _, graph, graph_analysis in graphs:
         for name in graph_analysis.order:
             line = graph_analysis.units[name].code_import
             if line and line not in imports:
                 imports.append(line)
-        check_names(graph, graph_analysis, names)
+        check_names(graph, graph_analysis, names, imported)
 
     # モデルの名前は文字の値として書き, コードとして解釈されないようにする
     title = (
@@ -226,7 +228,10 @@ def class_code(spec: dict, analysis: Any, class_name: str) -> list[str]:
     return lines
 
 
-def check_names(spec: dict, analysis: Any, class_names: list[str]) -> None:
+def check_names(
+    spec: dict, analysis: Any, class_names: list[str],
+    imported: Optional[dict[str, str]] = None
+) -> None:
     """
     書き出すコードで名前が重ならないことを確かめる関数
 
@@ -241,13 +246,17 @@ def check_names(spec: dict, analysis: Any, class_names: list[str]) -> None:
         定義の解析の結果
     class_names: list[str]
         書き出す全てのクラスの名前 (部分モデルと本体)
+    imported: Optional[dict[str, str]] = None
+        読み込む名前ごとの import の行 (書き出す全てのクラスで共有し,
+        その場で書き加える). None の場合はこの定義だけで確認
 
     Returns
     ----------
     None
     """
     # 読み込む名前 (nn, ops, 部品のクラス) と, 予約した変数の名前
-    imported: dict[str, str] = {"nn": "torch.nn"}
+    if imported is None:
+        imported = {"nn": "torch.nn"}
     for name in analysis.order:
         unit = analysis.units[name]
         code_name = unit.code_name.split(".")[0]

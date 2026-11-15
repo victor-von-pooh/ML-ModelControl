@@ -248,14 +248,16 @@ def embed_subgraph(
         )
     target = load_spec(spec)
     copied = load_spec(source)
-    subgraphs = target.get("subgraphs") or {}
-    if not isinstance(subgraphs, dict):
+    subgraphs = target.get("subgraphs")
+    nested = copied.pop("subgraphs", None)
+    subgraphs = {} if subgraphs is None else subgraphs
+    nested = {} if nested is None else nested
+    if not isinstance(subgraphs, dict) or not isinstance(nested, dict):
         raise ValueError("subgraphs は部分モデルの名前と定義の辞書にしてください")
     subgraphs = dict(subgraphs)
 
     # 写す定義の部分モデル (同じ名前で中身が同じものは 1 つにまとめる) と,
     # 版と部分モデルを除いた本体
-    nested = copied.pop("subgraphs", None) or {}
     copied.pop("format_version", None)
     if name in nested:
         raise ValueError(

@@ -295,3 +295,58 @@ def test_register_rejects_sub_prefix():
     """
     with pytest.raises(ValueError, match="sub"):
         register_unit(torch.nn.Identity, name="sub.Mine")
+
+
+def test_awkward_names():
+    """
+    予約語や数字になる部分モデルの名前と, self という入力の名前でも組み立てと
+    書き出しができることを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 予約語や数字になるクラスの名前は頭を付けた名前
+    for name, class_name in [("none", "SubgraphNone"), ("_1", "Subgraph1")]:
+        spec = yaml.safe_load(f"""
+inputs:
+  x: {{shape: [2, 4]}}
+nodes:
+  n: {{unit: sub.{name}, inputs: x}}
+outputs:
+  o: n
+subgraphs:
+  {name}:
+    inputs: {{x: {{}}}}
+    nodes:
+      r: {{unit: nn.ReLU, inputs: x}}
+    outputs: {{y: r}}
+""")
+        assert validate(spec) == []
+        code = export_python(spec)
+        assert f"class {class_name}(nn.Module):" in code
+        exec(code, {})
+
+    # 部分モデルの入力の口は位置で渡すので, self という名前でも計算できる
+    spec = yaml.safe_load("""
+inputs:
+  x: {shape: [2, 4]}
+  z: {shape: [2, 4]}
+nodes:
+  n: {unit: sub.s, inputs: {self: x, b: z}}
+outputs:
+  o: n
+subgraphs:
+  s:
+    inputs: {self: {}, b: {}}
+    nodes:
+      r: {unit: op.Add, inputs: {xs: [self, b]}}
+    outputs: {y: r}
+""")
+    model = build_model(spec)
+    assert model(torch.ones(2, 4), torch.zeros(2, 4)).sum().item() == 8
+    assert infer(spec)["ok"]
