@@ -165,7 +165,7 @@ ML-Found のプロジェクト (`configs/default/train.yaml`, `configs/experimen
     from torch.utils.data import DataLoader, TensorDataset
 
     from ml_found import Trainer, load_project_config, start_experiment
-    from ml_modelcontrol import build_model
+    from ml_modelcontrol import build_model, infer
 
     PROJECT_DIR = Path(__file__).resolve().parent
 
@@ -182,9 +182,20 @@ ML-Found のプロジェクト (`configs/default/train.yaml`, `configs/experimen
     # config (default に experiment と「項目=値」を重ねたもの) と差分
     cfg, diff = load_project_config(str(PROJECT_DIR))
 
-    # 定義から組み立て (誤りがあれば, 実験の出力先を作る前に SpecError で止まる)
+    # 定義から組み立て (引数の不足などの誤りは, 実験の出力先を作る前に
+    # SpecError で止まる)
     spec_path = PROJECT_DIR / cfg.model.spec
     model = build_model(spec_path, seed=cfg.experiment.seed)
+
+    # 形の誤り (in_features の食い違いなど) は組み立てでは分からないので,
+    # 形の推定で学習を始める前に確かめる
+    shapes = infer(spec_path)
+    if not shapes["ok"]:
+        errors = [
+            f"{name}: {node['error']}"
+            for name, node in shapes["nodes"].items() if node["status"] == "error"
+        ]
+        raise SystemExit("形を計算できません\n" + "\n".join(errors))
 
     # 実験を始め, 定義を実験の出力先に残す
     experiment = start_experiment(cfg, diff, str(PROJECT_DIR))
