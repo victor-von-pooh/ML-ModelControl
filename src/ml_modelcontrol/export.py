@@ -3,8 +3,8 @@ from pathlib import Path
 from typing import Any, Optional, Union
 
 from ml_modelcontrol.model import SpecError, to_arg
-from ml_modelcontrol.spec import load_spec, parse_ref
-from ml_modelcontrol.validate import analyze
+from ml_modelcontrol.spec import SUBGRAPH_PREFIX, load_spec, parse_ref
+from ml_modelcontrol.validate import analyze, class_name_of
 
 # 書き出すコードで変数の名前に使わない名前 (読み込むモジュールなど)
 RESERVED_VARS = {"self", "torch", "nn", "ops", "result", "_pick"}
@@ -114,22 +114,102 @@ def export_python(
     if not class_name.isidentifier() or keyword.iskeyword(class_name):
         raise ValueError(f"クラスの名前 {class_name!r} は識別子にしてください")
 
+    # 書き出すクラス (部分モデルは中のものから先に, 本体は最後)
+    used = used_units(spec, analysis)
+    graphs = [
+        (class_name_of(name), sub, sub_analysis)
+        for name, (sub, sub_analysis) in analysis.subgraphs.items()
+        if f"{SUBGRAPH_PREFIX}{name}" in used
+    ]
+    graphs.append((class_name, spec, analysis))
+    names = [name for name, _, _ in graphs]
+    for name in names:
+        if names.count(name) > 1:
+            raise ValueError(
+                f"クラスの名前 {name} が部分モデルのクラスの名前と重なります. "
+                "クラスか部分モデルの名前を変えてください"
+            )
+
     # 読み込むモジュールと, 名前の重なりの確認
+    # (同じ名前の別のクラスは, クラスをまたいでも確認)
     imports = ["from torch import nn"]
-    for name in analysis.order:
-        line = analysis.units[name].code_import
-        if line and line not in imports:
-            imports.append(line)
-    check_names(spec, analysis, class_name)
+    imported: dict[str, str] = {"nn": "torch.nn"}
+    for _, graph, graph_analysis in graphs:
+        for name in graph_analysis.order:
+            line = graph_analysis.units[name].code_import
+            if line and line not in imports:
+                imports.append(line)
+        check_names(graph, graph_analysis, names, imported)
 
     # モデルの名前は文字の値として書き, コードとして解釈されないようにする
     title = (
         f"{spec.get('name', class_name)} のモデル (ML-ModelControl の定義から"
         "書き出したコード)"
     )
+    lines = [repr(title), *imports]
+    for name, graph, graph_analysis in graphs:
+        lines += ["", "", *class_code(graph, graph_analysis, name)]
+    if any("_pick(" in line for line in lines):
+        start = lines.index(f"class {graphs[0][0]}(nn.Module):")
+        lines[start:start] = PICK_CODE
+    code = "\n".join(lines) + "\n"
+    if path is not None:
+        Path(path).write_text(code, encoding="utf-8")
+
+    return code
+
+
+def used_units(spec: dict, analysis: Any) -> set[str]:
+    """
+    本体と, 使われる部分モデルが使う部品の名前を集める関数
+
+    Parameters
+    ----------
+    spec: dict
+        モデルの定義
+    analysis: Any
+        定義の解析の結果
+
+    Returns
+    ----------
+    names: set[str]
+        部品の名前 (sub.block など)
+    """
+    # 本体の部品から, 部分モデルの中の部品へたどる
+    stack = [analysis.units[name].name for name in analysis.order]
+    names: set[str] = set()
+    while stack:
+        unit_name = stack.pop()
+        if unit_name in names:
+            continue
+        names.add(unit_name)
+        sub = analysis.subgraphs.get(unit_name[len(SUBGRAPH_PREFIX):])
+        if unit_name.startswith(SUBGRAPH_PREFIX) and sub is not None:
+            stack += [sub[1].units[name].name for name in sub[1].order]
+
+    return names
+
+
+def class_code(spec: dict, analysis: Any, class_name: str) -> list[str]:
+    """
+    1 つの定義 (本体か部分モデル) の nn.Module のクラスの行を作る関数
+
+    Parameters
+    ----------
+    spec: dict
+        モデルの定義
+    analysis: Any
+        定義の解析の結果
+    class_name: str
+        クラスの名前
+
+    Returns
+    ----------
+    lines: list[str]
+        クラスの定義の行
+    """
+    # 部品を作る行と, forward の行
     lines = [
-        repr(title),
-        *imports, "", "",
         f"class {class_name}(nn.Module):",
         "    def __init__(self):",
         "        # 親クラスのコンストラクタを呼び出す",
@@ -143,19 +223,15 @@ def export_python(
             build_args(spec, analysis, name), "),", "            "
         )
     lines.append("        })")
-    forward = forward_code(spec, analysis)
-    if any("_pick(" in line for line in forward):
-        start = lines.index(f"class {class_name}(nn.Module):")
-        lines[start:start] = PICK_CODE
-    lines += forward
-    code = "\n".join(lines) + "\n"
-    if path is not None:
-        Path(path).write_text(code, encoding="utf-8")
+    lines += forward_code(spec, analysis)
 
-    return code
+    return lines
 
 
-def check_names(spec: dict, analysis: Any, class_name: str) -> None:
+def check_names(
+    spec: dict, analysis: Any, class_names: list[str],
+    imported: Optional[dict[str, str]] = None
+) -> None:
     """
     書き出すコードで名前が重ならないことを確かめる関数
 
@@ -168,18 +244,24 @@ def check_names(spec: dict, analysis: Any, class_name: str) -> None:
         モデルの定義
     analysis: Any
         定義の解析の結果
-    class_name: str
-        書き出すクラスの名前
+    class_names: list[str]
+        書き出す全てのクラスの名前 (部分モデルと本体)
+    imported: Optional[dict[str, str]] = None
+        読み込む名前ごとの import の行 (書き出す全てのクラスで共有し,
+        その場で書き加える). None の場合はこの定義だけで確認
 
     Returns
     ----------
     None
     """
     # 読み込む名前 (nn, ops, 部品のクラス) と, 予約した変数の名前
-    imported: dict[str, str] = {"nn": "torch.nn"}
+    if imported is None:
+        imported = {"nn": "torch.nn"}
     for name in analysis.order:
         unit = analysis.units[name]
         code_name = unit.code_name.split(".")[0]
+        if unit.source == "subgraph":
+            continue
         if "<locals>" in unit.code_import or "__main__" in unit.code_import:
             raise ValueError(
                 f"部品 {unit.name} は関数の中か実行したスクリプトで定義した"
@@ -204,12 +286,13 @@ def check_names(spec: dict, analysis: Any, class_name: str) -> None:
                 f"名前 {name} は書き出すコードで使う名前と重なるので, 変えて"
                 "ください"
             )
-    if class_name in reserved or class_name in spec["inputs"] or (
-        class_name in analysis.order
-    ):
-        raise ValueError(
-            f"クラスの名前 {class_name} は他の名前と重なるので使えません"
-        )
+    for class_name in class_names:
+        if class_name in reserved or class_name in spec["inputs"] or (
+            class_name in analysis.order
+        ):
+            raise ValueError(
+                f"クラスの名前 {class_name} は他の名前と重なるので使えません"
+            )
 
 
 def build_args(spec: dict, analysis: Any, name: str) -> list[str]:
@@ -356,10 +439,13 @@ def ref_code(analysis: Any, ref: str) -> str:
         output = next(
             (item for item in outputs if item.name == port), outputs[0]
         )
-        code = path_code(
-            code, output.path,
-            analysis.units[name].source == "transformers"
-        )
+        if analysis.units[name].source == "subgraph":
+            code += "".join(f"[{step!r}]" for step in output.path)
+        else:
+            code = path_code(
+                code, output.path,
+                analysis.units[name].source == "transformers"
+            )
 
     return code
 

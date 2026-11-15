@@ -76,6 +76,17 @@ text = dump_spec(spec)                   # 決まったキーの順の YAML の�
 
 `export_python("model.yaml")` で, 同じ計算をする `nn.Module` のクラスの Python のコードを書き出せる (`state_dict` のキーは `build_model` と同じ). 演算 (`op.Add` など) と Hugging Face の部品を使う場合, 書き出したコードは `ml_modelcontrol` を読み込む (`from ml_modelcontrol import ops` など) ので, 動かす環境にもこのライブラリを入れる.
 
+保存したモデルの定義は, 別の定義の中で 1 つの部品 (部分モデル) として使える. `embed_subgraph(spec, "block", "block.yaml")` で定義の `subgraphs` に写し, ノードの `unit` に `sub.block` と書く (部分モデルの入力が全て必須の入力の口, 出力が出力の口になり, 引数は持たない. 同じ部分モデルを何度使っても重みは別). 元のファイルを参照せずに写すので, 1 つのファイルだけで組み立てられる. 書き方は [docs/DESIGN.md](docs/DESIGN.md) の「部分モデル」.
+
+```python
+from ml_modelcontrol import describe_spec_units, embed_subgraph
+
+spec = embed_subgraph("model.yaml", "block", "block.yaml")  # 写した定義 (辞書)
+spec["nodes"]["b1"] = {"unit": "sub.block", "inputs": "x"}
+spec["outputs"] = {"y": "b1"}
+units = describe_spec_units(spec)        # 部分モデルの部品の一覧 (describe_units() に加えて使う)
+```
+
 自作の部品は `register_unit(MyBlock, name="my.Block")` で登録すると, 定義の `unit` に書ける (`forward` が複数の値を返す場合は `outputs=["a", "b"]` で口の名前を付ける. 属性や辞書のキーで値を返す場合は `outputs={"logits": ["logits"], "last": ["hidden_states", -1]}` のように口ごとの取り出し方を書く).
 
 ## ML-Found で学習する
