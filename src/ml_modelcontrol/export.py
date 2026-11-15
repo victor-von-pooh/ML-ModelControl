@@ -169,7 +169,7 @@ def export_python(
     renames: dict[str, str] = {}
     if standalone:
         imports, copied, renames = copy_own_classes(graphs, imports, names)
-    lines = [repr(title), *imports]
+    lines = [repr(title), *merge_imports(imports)]
     for block in copied:
         lines += ["", "", *block.splitlines()]
     for name, graph, graph_analysis in graphs:
@@ -215,6 +215,43 @@ def used_units(spec: dict, analysis: Any) -> set[str]:
             stack += [sub[1].units[name].name for name in sub[1].order]
 
     return names
+
+
+def merge_imports(imports: list[str]) -> list[str]:
+    """
+    同じモジュールから読み込む from の行を 1 行にまとめる関数
+
+    Parameters
+    ----------
+    imports: list[str]
+        読み込む行 (空の行は区切り)
+
+    Returns
+    ----------
+    merged: list[str]
+        まとめた行 (最初に現れた位置に, 名前を現れた順に並べたもの)
+    """
+    # モジュールごとの名前を集め, 最初の行の位置にまとめて出力
+    names: dict[str, list[str]] = {}
+    merged: list[str] = []
+    for line in imports:
+        if not line.startswith("from ") or " import " not in line:
+            merged.append(line)
+            continue
+        module, _, items = line[len("from "):].partition(" import ")
+        if module not in names:
+            names[module] = []
+            merged.append(f"from {module} import ")
+        for item in items.split(","):
+            if item.strip() and item.strip() not in names[module]:
+                names[module].append(item.strip())
+    merged = [
+        line + ", ".join(names[line[len("from "):-len(" import ")]])
+        if line.startswith("from ") and line.endswith(" import ") else line
+        for line in merged
+    ]
+
+    return merged
 
 
 def copy_own_classes(
