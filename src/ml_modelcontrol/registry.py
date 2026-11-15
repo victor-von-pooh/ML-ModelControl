@@ -184,7 +184,7 @@ PARAM_DESCRIPTIONS = {
     "apply_act": "活性化関数を通すか",
     "norm_layer": "正規化の層 (名前で選ぶ. BatchNorm2d, LayerNorm など)",
     "gate_layer": "ゲートの活性化関数 (名前で選ぶ. sigmoid など)",
-    "spatial_dims": "空間の次元の数 (2 は画像, 3 は立体)",
+    "spatial_dims": "空間の次元の数 (1 は系列, 2 は画像, 3 は立体)",
     "pretrained": "学習済みの重みを読むか (形の推定では読まない)",
     "progress": "重みの取得の進み具合を表示するか",
     "hidden_features": "中間の特徴量の数",
@@ -199,10 +199,15 @@ PARAM_DESCRIPTIONS = {
     "dropout_prob": "ドロップアウトの割合"
 }
 
+# 名前ごとの説明があっても, ライブラリによって意味が違うので docstring の
+# 説明を優先する引数の名前 (MONAI の input_size は空間の大きさ, timm の
+# InplaceAbn の act_layer は選べる種類が少ないなど)
+AMBIGUOUS_NAMES = {"input_size", "act_layer"}
+
+
 def describe_params(spec: UnitSpec, cls: Optional[type] = None) -> None:
     """
-    説明の無い引数に, 名前ごとの説明か, クラスの docstring の説明を付ける
-    関数
+    説明の無い引数に名前ごとか docstring の説明を付ける関数
 
     手で書いた説明, 名前ごとの説明 (日本語), docstring の説明 (ライブラリの
     言葉のまま) の順に使う
@@ -218,17 +223,22 @@ def describe_params(spec: UnitSpec, cls: Optional[type] = None) -> None:
     ----------
     None
     """
+    # ライブラリごとに意味の違う名前は, docstring の説明を優先
     documented = docstring_params(cls) if cls is not None else {}
     for param in spec.params:
-        if not param.description:
-            param.description = PARAM_DESCRIPTIONS.get(
-                param.name, documented.get(param.name, "")
-            )
+        if param.description:
+            continue
+        if param.name in AMBIGUOUS_NAMES and param.name in documented:
+            param.description = documented[param.name]
+            continue
+        param.description = PARAM_DESCRIPTIONS.get(
+            param.name, documented.get(param.name, "")
+        )
 
 
 # docstring の引数の節の見出し (Google 形式) と, NumPy 形式の見出しの下線
 DOC_SECTION = re.compile(
-    r"^(\s*)(Args|Arguments|Parameters|Params|Keyword Args|Attributes)"
+    r"^(\s*)(Args|Arguments|Parameters|Params|Keyword Args)"
     r"\s*:\s*$"
 )
 DOC_UNDERLINE = re.compile(r"^\s*-{3,}\s*$")
@@ -236,12 +246,18 @@ DOC_UNDERLINE = re.compile(r"^\s*-{3,}\s*$")
 # Google 形式の 1 つの引数の行 (name (型): 説明) と, NumPy 形式の行
 # (name : 型), Sphinx 形式の行 (:param 型 name: 説明)
 DOC_GOOGLE = re.compile(
-    r"^(\s*)\**([A-Za-z_][A-Za-z0-9_]*)\s*(\([^)]*\))?\s*:\s*(.*)$"
+    r"^(\s*)\**([A-Za-z_][A-Za-z0-9_]*)\s*"
+    r"(\((?:[^()]|\([^()]*\))*\))?\s*:\s*(.*)$"
 )
-DOC_NUMPY = re.compile(r"^(\s*)([A-Za-z_][A-Za-z0-9_, ]*?)\s*:\s*(.*)$")
+DOC_NUMPY = re.compile(
+    r"^(\s*)\**([A-Za-z_][A-Za-z0-9_, *]*?)\s*:\s*(.*)$"
+)
 DOC_SPHINX = re.compile(
     r"^\s*:param\s+(?:[^:]*\s)?([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$"
 )
+
+# reST の役割の書き方 (:obj:`True` など. 中の文字だけを残す)
+DOC_ROLE = re.compile(r":[A-Za-z]+:`~?([^`]*)`")
 
 # docstring から取り出す説明の文字数の上限
 DOC_MAX_LENGTH = 300
@@ -249,10 +265,9 @@ DOC_MAX_LENGTH = 300
 
 def docstring_params(cls: type) -> dict[str, str]:
     """
-    クラスの docstring (クラスと __init__) から, 引数ごとの説明を取り出す
-    関数
+    クラスの docstring から引数ごとの説明を取り出す関数
 
-    Google 形式 (Args:), NumPy 形式 (Parameters と下線), Sphinx 形式
+    クラスと __init__ の docstring を読む. Google 形式 (Args:), NumPy 形式 (Parameters と下線), Sphinx 形式
     (:param name:) を読む. 読めない書き方の引数は含めない
 
     Parameters
@@ -268,8 +283,9 @@ def docstring_params(cls: type) -> dict[str, str]:
     # クラスと __init__ の docstring を順に読み, 先に見つけた説明を使用
     descriptions: dict[str, str] = {}
     for doc in (cls.__doc__, getattr(cls.__init__, "__doc__", None)):
-        if not isinstance(doc, str) or cls.__init__ is nn.Module.__init__ and (
-            doc is nn.Module.__init__.__doc__
+        if not isinstance(doc, str) or (
+            cls.__init__ is nn.Module.__init__
+            and doc is nn.Module.__init__.__doc__
         ):
             continue
         for name, text in parse_doc_params(inspect.cleandoc(doc)).items():
@@ -363,16 +379,18 @@ def parse_doc_params(doc: str) -> dict[str, str]:
                 match = (
                     DOC_GOOGLE.match(line) if google else DOC_NUMPY.match(line)
                 )
+                # 引数の字下げで読めない行 (書き方の崩れた引数や地の文) は,
+                # 前の引数の説明に混ぜずに読み飛ばし
                 if match is None:
                     if indent <= base:
                         break
-                    if current is not None:
-                        current.append(line.strip())
+                    current = None
                     index += 1
                     continue
                 entry_indent = indent
                 names = [
-                    name.strip() for name in match.group(2).split(",")
+                    name.strip().lstrip("*")
+                    for name in match.group(2).split(",")
                 ]
                 current = []
                 for name in names:
@@ -389,6 +407,7 @@ def parse_doc_params(doc: str) -> dict[str, str]:
     descriptions = {}
     for name, parts in found.items():
         text = " ".join(" ".join(parts).split())
+        text = DOC_ROLE.sub(r"\1", text).replace("``", "")
         if not text:
             continue
         if len(text) > DOC_MAX_LENGTH:

@@ -1108,6 +1108,21 @@ def test_docstring_params():
     sphinx = parse_doc_params(":param int width: Width\n    of block.\n")
     assert sphinx == {"width": "Width of block."}
 
+    # 引数の字下げの読めない行は前の引数に混ぜず, 入れ子の括弧の型と
+    # *args も読み, reST の書き方は中の文字だけ
+    assert parse_doc_params(
+        "Args:\n    a: first\n    Note that x\n    b: second"
+    ) == {"a": "first", "b": "second"}
+    assert parse_doc_params(
+        "Args:\n    a: first\n    c (Callable[(int), int]): third\n"
+    ) == {"a": "first", "c": "third"}
+    assert parse_doc_params(
+        "Parameters\n----------\n*args : tuple\n    pos\nx : int\n    X.\n"
+    ) == {"args": "pos", "x": "X."}
+    assert parse_doc_params("Args:\n    a: If :obj:`True`, uses ``x``.") == {
+        "a": "If True, uses x."
+    }
+
     # 名前ごとの説明があればそれ, 無ければ docstring
     class Documented(nn.Module):
         """
