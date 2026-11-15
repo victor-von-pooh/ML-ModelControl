@@ -467,7 +467,7 @@ def register_torch_unit(cls: type) -> UnitSpec:
     apply_notes(spec, TORCH_NOTES.get(cls.__name__, {}))
     if not spec.description:
         spec.description = default_description(cls.__name__)
-    describe_params(spec)
+    describe_params(spec, cls)
     for param in spec.params:
         choices = PARAM_CHOICES.get((cls.__name__, param.name))
         if choices is not None:

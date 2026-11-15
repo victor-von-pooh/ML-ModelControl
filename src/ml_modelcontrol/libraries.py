@@ -367,7 +367,7 @@ def register_class(
         code_import=code_import, offline=offline
     )
     apply_notes(spec, notes or {})
-    describe_params(spec)
+    describe_params(spec, cls)
 
     # Kornia の数の組の引数は, 型ヒントと違い数 1 つも受け取るものが多いので,
     # 数も受け付ける (正しい値を確認で誤りにしないため)
