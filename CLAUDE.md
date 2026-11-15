@@ -12,7 +12,7 @@ PyTorch (と互換のライブラリ) で作れるモデルの部品を登録簿
 ## コードの書き方
 
 - [CODING_STYLE.md](CODING_STYLE.md) に従う (日本語の NumPy 形式の docstring, コメントは体言止め, 79 文字以内, `torch.nn.functional` を使わないなど)
-- ドキュメントとコードのコメントでは, 「機械学習を全て GUI 上で行う」という目的のために開発しているリポジトリ (今は ML-Found, ML-Dashboard, ML-ModelControl, ML-CreateArchitecture, ML_tester) 以外に触れない. ローカルのディレクトリ構成やパスも書かない. 外部のライブラリ (PyTorch Geometric, Hugging Face の transformers など) には触れてよい
+- ドキュメントとコードのコメントでは, 「機械学習を全て GUI 上で行う」という目的のために開発しているリポジトリ (今は ML-Found, ML-Dashboard, ML-ModelControl, ML-CreateArchitecture, ML-EDA, ML-Fathom, ML_tester) 以外に触れない. ローカルのディレクトリ構成やパスも書かない. 外部のライブラリ (PyTorch Geometric, Hugging Face の transformers など) には触れてよい
 
 ## 進める流れ
 
