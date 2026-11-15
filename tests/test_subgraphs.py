@@ -155,6 +155,7 @@ def test_errors_inside_subgraph():
     issues = validate(spec)
     assert any(
         issue["location"] == "subgraphs.pair.nodes.act.unit"
+        and issue["subgraph"] == "pair" and issue["node"] is None
         and "もしかして" in issue["message"] for issue in issues
     )
     assert any(
@@ -196,7 +197,8 @@ def test_cycle_and_unknown():
     spec["nodes"]["b1"]["unit"] = "sub.blok"
     issues = validate(spec)
     assert any(
-        issue["code"] == "unknown_unit" and "sub.block" in issue["message"]
+        issue["code"] == "unknown_subgraph"
+        and "sub.block" in issue["message"]
         for issue in issues
     )
 
@@ -242,21 +244,38 @@ def test_embed_and_dump():
     with pytest.raises(ValueError, match="名前"):
         embed_subgraph(spec, "1x", changed)
 
+    # 置き換えると中身が変わり, 写す定義の中と同じ名前は誤り
+    replaced = embed_subgraph(spec, "block", changed, replace=True)
+    assert replaced["subgraphs"]["block"]["nodes"]["fc"]["params"]["bias"] is (
+        False
+    )
+    with pytest.raises(ValueError, match="写す定義の中"):
+        embed_subgraph(yaml.safe_load(BLOCK), "block", spec)
+
     # 保存して読み直しても同じ, subgraphs は outputs の後
     text = dump_spec(spec)
     assert load_spec(yaml.safe_load(text)) == load_spec(spec)
     assert text.index("subgraphs:") > text.index("outputs:")
 
-    # 使われない部分モデルは注意
-    spec["subgraphs"]["spare"] = spec["subgraphs"]["block"]
-    assert any(
-        issue["code"] == "unused_subgraph" for issue in validate(spec)
-    )
+    # 使われない部分モデルは注意 (使われない部分モデルだけが使うものも)
+    spec["subgraphs"]["spare"] = spec["subgraphs"]["pair"]
+    spec["subgraphs"]["pair"] = spec["subgraphs"]["block"]
+    unused = {
+        issue["location"] for issue in validate(spec)
+        if issue["code"] == "unused_subgraph"
+    }
+    assert unused == {"subgraphs.spare"}
+    spec["nodes"]["pair"]["unit"] = "sub.block"
+    unused = {
+        issue["location"] for issue in validate(spec)
+        if issue["code"] == "unused_subgraph"
+    }
+    assert unused == {"subgraphs.spare", "subgraphs.pair"}
 
     # GUI 向けの一覧は口を持ち, 出力が 2 つの部分モデルは口ごと
     units = {unit["name"]: unit for unit in describe_spec_units(spec)}
-    assert [port["name"] for port in units["sub.pair"]["inputs"]] == ["v"]
-    assert [port["name"] for port in units["sub.pair"]["outputs"]] == [
+    assert [port["name"] for port in units["sub.spare"]["inputs"]] == ["v"]
+    assert [port["name"] for port in units["sub.spare"]["outputs"]] == [
         "a", "b"
     ]
     assert units["sub.block"]["description"] == "残差のブロック"

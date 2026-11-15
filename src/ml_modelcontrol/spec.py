@@ -207,13 +207,13 @@ def order_graph(spec: dict) -> dict:
 
 def embed_subgraph(
     spec: Union[str, Path, dict], name: str,
-    source: Union[str, Path, dict]
+    source: Union[str, Path, dict], replace: bool = False
 ) -> dict:
     """
     別のモデルの定義を, 部分モデルとして定義の中に写す関数
 
-    写す定義の部分モデルも一緒に写す. 写した後は, ノードの unit に
-    sub.<name> と書いて使う
+    写す定義の部分モデルも同じ名前のまま一緒に写す. 写した後は, ノードの
+    unit に sub.<name> と書いて使う
 
     Parameters
     ----------
@@ -223,6 +223,9 @@ def embed_subgraph(
         部分モデルの名前
     source: Union[str, Path, dict]
         写すモデルの定義, またはそのファイルのパス
+    replace: bool = False
+        同じ名前の部分モデルがある場合に置き換えるか (元の定義を直した後の
+        写し直し). 写す定義の部分モデルの名前の重なりは置き換えない
 
     Returns
     ----------
@@ -254,13 +257,24 @@ def embed_subgraph(
     # 版と部分モデルを除いた本体
     nested = copied.pop("subgraphs", None) or {}
     copied.pop("format_version", None)
-    for key, value in [*nested.items(), (name, copied)]:
+    if name in nested:
+        raise ValueError(
+            f"写す定義の中に同じ名前の部分モデル {name} があるので, 別の名前に"
+            "してください"
+        )
+    for key, value in nested.items():
         if key in subgraphs and subgraphs[key] != value:
             raise ValueError(
-                f"部分モデル {key} は既にあり, 中身が違います. 別の名前にして"
-                "ください"
+                f"写す定義の部分モデル {key} と同じ名前で中身の違う部分モデルが"
+                "既にあります"
             )
         subgraphs[key] = copy.deepcopy(value)
+    if name in subgraphs and subgraphs[name] != copied and not replace:
+        raise ValueError(
+            f"部分モデル {name} は既にあり, 中身が違います. 別の名前にするか, "
+            "replace=True で置き換えてください"
+        )
+    subgraphs[name] = copied
     target["subgraphs"] = subgraphs
 
     return target

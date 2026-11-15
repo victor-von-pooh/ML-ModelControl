@@ -5,7 +5,7 @@ import math
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 from torch import nn
 
@@ -35,13 +35,17 @@ FILLS = {"zeros", "ones", "arange"}
 
 @dataclass
 class Issue:
-    # 誤りか注意か, 決まった英字の識別子, ノードの名前 (定義全体なら None),
-    # 場所 (params.out_features など), 説明
+    # 誤りか注意か, 決まった英字の識別子, 説明, ノードの名前 (定義全体と
+    # 部分モデルの中なら None), 場所 (params.out_features など)
     severity: str
     code: str
     message: str
     node: Optional[str] = None
     location: Optional[str] = None
+
+    # 部分モデルの中の誤りの場合の部分モデルの名前 (node は None で,
+    # location は subgraphs.<名前>.nodes.<ノード>.<場所> のような全体の場所)
+    subgraph: Optional[str] = None
 
 
 @dataclass
@@ -54,8 +58,7 @@ class Analysis:
     )
     units: dict[str, UnitSpec] = field(default_factory=dict)
 
-    # 部分モデルの名前ごとの, 定義と解析 (中の部分モデルも含め, 定義全体で
-    # 共有)
+    # 誤りの無い部分モデルの, 名前ごとの定義と解析 (入れ子のものも含む)
     subgraphs: dict[str, tuple[dict, "Analysis"]] = field(
         default_factory=dict
     )
@@ -589,8 +592,17 @@ def check_node(
             node=name, location="unit"
         ))
         return
+    unit_name = str(node.get("unit"))
+    if unit_name.startswith(SUBGRAPH_PREFIX) and not has_subgraph(unit_name):
+        issues.append(Issue(
+            "error", "unknown_subgraph",
+            f"部分モデル {unit_name[len(SUBGRAPH_PREFIX):]} は定義の "
+            f"subgraphs にありません{suggest(unit_name, unit_names())}",
+            node=name, location="unit"
+        ))
+        return
     try:
-        unit = lookup_unit(str(node.get("unit")))
+        unit = lookup_unit(unit_name)
     except KeyError:
         issues.append(Issue(
             "error", "unknown_unit",
@@ -1040,7 +1052,8 @@ def check_unused(
             for targets in analysis.connections[name].values():
                 stack.extend(target for target, _ in targets)
         elif isinstance(nodes.get(name), dict):
-            # 部品を確かめられなかったノードは, 書いたつなぎ先の文字から
+            # 部品を確かめられなかったノードは, 書いたつなぎ先の文字からの
+            # 追跡
             stack.extend(raw_refs(node_inputs(nodes[name])))
 
     # 届かないノードと入力を注意として追加
@@ -1083,6 +1096,29 @@ def raw_refs(inputs: Any) -> list[str]:
     names = [parse_ref(ref)[0] for ref in refs]
 
     return names
+
+
+def has_subgraph(name: str) -> bool:
+    """
+    sub. で始まる部品の名前の部分モデルが, 確かめている定義にあるかを返す
+    関数
+
+    Parameters
+    ----------
+    name: str
+        部品の名前 (sub.block など)
+
+    Returns
+    ----------
+    found: bool
+        定義の subgraphs にある場合は True
+    """
+    subgraphs = LOCAL_UNITS.get()
+    found = subgraphs is not None and (
+        name[len(SUBGRAPH_PREFIX):] in subgraphs.specs
+    )
+
+    return found
 
 
 def lookup_unit(name: str) -> UnitSpec:
@@ -1152,9 +1188,11 @@ def class_name_of(name: str) -> str:
         ResBlock のような名前
     """
     parts = [part for part in name.split("_") if part]
-    class_name = "".join(part[:1].upper() + part[1:] for part in parts)
+    class_name = "".join(
+        part[:1].upper() + part[1:] for part in parts
+    ) or "Subgraph"
 
-    return class_name or "Subgraph"
+    return class_name
 
 
 # 定義の部分モデルを, 必要になったときに確かめて部品にするもの
@@ -1190,6 +1228,7 @@ class Subgraphs:
         ----------
         None
         """
+        # 名前の順に部分モデルを確認
         for name in self.names:
             try:
                 self.unit(name)
@@ -1224,7 +1263,7 @@ class Subgraphs:
         if name in self.stack:
             cycle = " → ".join([*self.stack[self.stack.index(name):], name])
             unit = UnitSpec(
-                name=unit_name, category="subgraph", source="subgraph",
+                name=unit_name, category="sub", source="subgraph",
                 available=False,
                 reason=f"部分モデルが互いに使い合っています ({cycle})"
             )
@@ -1257,7 +1296,8 @@ class Subgraphs:
             )
             self.issues.append(Issue(
                 issue.severity, issue.code,
-                f"部分モデル {name}: {issue.message}", location=where
+                f"部分モデル {name}: {issue.message}", location=where,
+                subgraph=name
             ))
 
         # 入力は全て必須の口, 出力は出力の口 (2 つ以上なら辞書のキー)
@@ -1283,15 +1323,15 @@ class Subgraphs:
             for key in output_names
         ]
         unit = UnitSpec(
-            name=unit_name, category="subgraph", source="subgraph",
+            name=unit_name, category="sub", source="subgraph",
             description=str(
                 spec.get("description", "") if isinstance(spec, dict) else ""
             ),
             inputs=input_ports, outputs=output_ports,
             available=not errors,
             reason=(
-                f"部分モデル {name} に誤りがあります (subgraphs.{name} の誤りを"
-                "見てください)" if errors else ""
+                f"部分モデル {name} の中に誤りがあります. 先に部分モデルの"
+                "中の誤りを直してください" if errors else ""
             ),
             code_name=class_name_of(name)
         )
@@ -1303,7 +1343,9 @@ class Subgraphs:
         return unit
 
 
-def subgraph_builder(spec: dict, analysis: Analysis) -> Any:
+def subgraph_builder(
+    spec: dict, analysis: Analysis
+) -> Callable[[], nn.Module]:
     """
     部分モデルの GraphModel を作る関数を返す関数
 
@@ -1316,17 +1358,54 @@ def subgraph_builder(spec: dict, analysis: Analysis) -> Any:
 
     Returns
     ----------
-    builder: Callable[[], GraphModel]
+    builder: Callable[[], nn.Module]
         引数なしで部分モデルを作る関数
     """
     def build() -> nn.Module:
+        """
+        部分モデルの GraphModel を作る関数
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        ----------
+        model: nn.Module
+            部分モデル
+        """
         # 循環 import を避けるため, ここで読み込み
         from ml_modelcontrol.model import GraphModel
 
         model = GraphModel(spec, analysis)
+
         return model
 
     return build
+
+
+def units_of(graph: Any) -> list[str]:
+    """
+    定義 (本体か部分モデル) のノードの部品の名前を返す関数
+
+    Parameters
+    ----------
+    graph: Any
+        定義 (辞書でない場合は空として扱う)
+
+    Returns
+    ----------
+    names: list[str]
+        ノードの部品の名前
+    """
+    nodes = graph.get("nodes") if isinstance(graph, dict) else None
+    names = [
+        str(node.get("unit"))
+        for node in (nodes if isinstance(nodes, dict) else {}).values()
+        if isinstance(node, dict)
+    ]
+
+    return names
 
 
 def check_unused_subgraphs(
@@ -1348,17 +1427,18 @@ def check_unused_subgraphs(
     ----------
     None
     """
-    # 本体と部分モデルのノードの部品の名前を集める
-    graphs = [spec, *subgraphs.specs.values()]
-    used = {
-        str(node.get("unit"))
-        for graph in graphs if isinstance(graph, dict)
-        for node in (
-            graph.get("nodes") if isinstance(graph.get("nodes"), dict)
-            else {}
-        ).values()
-        if isinstance(node, dict)
-    }
+    # 本体のノードから, 使う部分モデルの中のノードへたどる
+    stack = units_of(spec)
+    used: set[str] = set()
+    while stack:
+        unit_name = stack.pop()
+        if unit_name in used:
+            continue
+        used.add(unit_name)
+        if unit_name.startswith(SUBGRAPH_PREFIX):
+            stack += units_of(
+                subgraphs.specs.get(unit_name[len(SUBGRAPH_PREFIX):])
+            )
     for name in subgraphs.names:
         if SUBGRAPH_PREFIX + name not in used:
             analysis.issues.append(Issue(
