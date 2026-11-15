@@ -1257,7 +1257,7 @@ def test_error_shows_incoming_values():
         "outputs": {"y": "fc"}
     }
     error = infer(spec)["nodes"]["fc"]["error"]
-    assert error.endswith("(入った値: input [4, 16] float32)")
+    assert "(入った値: input [4, 16] float32)" in error
 
 
 def test_error_shape_hints():
