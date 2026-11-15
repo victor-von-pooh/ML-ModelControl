@@ -702,6 +702,7 @@ def register_unit(
         code_import=f"from {cls.__module__} import {cls.__name__}"
     )
     apply_notes(spec, {"params": notes or {}})
+    describe_params(spec, cls)
     register(spec)
 
     return spec

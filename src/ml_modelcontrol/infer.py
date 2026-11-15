@@ -204,6 +204,12 @@ def infer(
     # 取得と読み込みを避けるため)
     # (部分モデルの中のノードも)
     spec = load_spec(spec)
+    # 引数の組み合わせの誤り (学習済みの重みとクラスの数など) は, 重みを
+    # 読まない値に置き換える前の定義で確かめる
+    combinations = [
+        issue for issue in analyze(spec).issues
+        if issue.code == "invalid_combination"
+    ]
     subgraphs = spec.get("subgraphs")
     graphs = [spec, *(
         subgraphs.values() if isinstance(subgraphs, dict) else []
@@ -217,6 +223,7 @@ def infer(
             if offline and isinstance(node.get("params", {}) or {}, dict):
                 node["params"] = {**(node.get("params") or {}), **offline}
     analysis = analyze(spec)
+    analysis.issues.extend(combinations)
     result: dict = {
         "ok": False, "issues": [vars(issue) for issue in analysis.issues],
         "nodes": {}, "outputs": {}, "params": None, "trainable": None,

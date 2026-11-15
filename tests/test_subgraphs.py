@@ -373,3 +373,81 @@ def test_error_inside_subgraph_names_inner_node():
     error = infer(spec)["nodes"]["b1"]["error"]
     assert error.startswith("RuntimeError")
     assert "ノード fc (nn.Linear)" in error
+
+
+def test_audit_fixes():
+    """
+    形の推定での組み合わせの誤り, 使われない部分モデルの subgraph, 出力の
+    名前の注意, 中の部分モデルも置き換える写し直しを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 使われない部分モデルの注意は, その部分モデルの名前を持つ
+    spec = make_main()
+    spec["subgraphs"]["spare"] = spec["subgraphs"]["block"]
+    unused = [
+        issue for issue in validate(spec)
+        if issue["code"] == "unused_subgraph"
+    ]
+    assert unused and unused[0]["subgraph"] == "spare"
+
+    # 出力の名前が書き出すコードの名前と同じでも注意しない
+    spec = make_main()
+    spec["outputs"] = {"result": "head"}
+    assert not any(
+        issue["code"] == "export_name" for issue in validate(spec)
+    )
+
+    # 中の部分モデルが変わった定義も replace=True で写し直せる
+    main = make_main()
+    source = {
+        **yaml.safe_load(BLOCK),
+        "nodes": {"b": {"unit": "sub.block", "inputs": "x"}},
+        "outputs": {"y": "b"},
+        "subgraphs": {"block": {
+            **main["subgraphs"]["block"], "description": "直した"
+        }}
+    }
+    replaced = embed_subgraph(main, "wrap", source, replace=True)
+    assert replaced["subgraphs"]["block"]["description"] == "直した"
+
+
+def test_infer_reports_combination():
+    """
+    形の推定 (重みを読まない) でも, 学習済みの重みとクラスの数の食い違いを
+    誤りにすることを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    from ml_modelcontrol import get_unit
+
+    if not get_unit("tv.Model").available:
+        pytest.skip("torchvision が入っていない")
+    spec = {
+        "inputs": {"x": {"shape": [2, 3, 32, 32]}},
+        "nodes": {"m": {
+            "unit": "tv.Model", "inputs": "x",
+            "params": {
+                "name": "resnet18", "weights": "DEFAULT", "num_classes": 5
+            }
+        }},
+        "outputs": {"y": "m"}
+    }
+    result = infer(spec)
+    assert not result["ok"]
+    assert any(
+        issue["code"] == "invalid_combination" for issue in result["issues"]
+    )
+    assert result["nodes"]["m"]["status"] == "error"
