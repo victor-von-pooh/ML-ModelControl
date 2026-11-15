@@ -263,6 +263,32 @@ DOC_SPHINX = re.compile(
     r"^\s*:param\s+(?:[^:]*\s)?([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$"
 )
 
+# 数式の役割 (:math:`...`) と, LaTeX の命令 (\\mathbf など) と波括弧
+DOC_MATH_ROLE = re.compile(r":math:`([^`]*)`")
+LATEX_COMMAND = re.compile(r"\\[A-Za-z]+\s*")
+LATEX_BRACES = re.compile(r"[{}]")
+
+
+def plain_math(text: str) -> str:
+    """
+    数式の書き方を, 命令と波括弧を除いた読める文字にする関数
+
+    Parameters
+    ----------
+    text: str
+        数式 (\\mathbf{\\hat{A}} + 2\\mathbf{I} など)
+
+    Returns
+    ----------
+    plain: str
+        命令と波括弧を除いた文字 (A + 2I など)
+    """
+    plain = LATEX_BRACES.sub("", LATEX_COMMAND.sub("", text))
+    plain = plain.replace("\\", "").strip()
+
+    return plain
+
+
 # reST の役割の書き方 (:obj:`True` など. 中の文字だけを残す)
 DOC_ROLE = re.compile(r":[A-Za-z]+:`~?([^`]*)`")
 
@@ -456,6 +482,7 @@ def parse_doc_params(doc: str) -> dict[str, str]:
     descriptions = {}
     for name, parts in found.items():
         text = " ".join(" ".join(parts).split())
+        text = DOC_MATH_ROLE.sub(lambda match: plain_math(match.group(1)), text)
         text = DOC_ROLE.sub(r"\1", text).replace("``", "")
         if not text:
             continue
