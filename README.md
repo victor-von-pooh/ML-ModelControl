@@ -102,6 +102,10 @@ dump_spec(spec, "model.yaml")            # 写した定義を保存
 
 組み立てたモデルは普通の `nn.Module` なので, [ML-Found](https://github.com/victor-von-pooh/ML-Found) の `Trainer` にそのまま渡せる. 定義のファイルの置き場をプロジェクトの config に書き, 学習スクリプトで組み立てる. 定義のファイルは実験の出力先に写しておくと, 後から同じモデルを作って `final_model.pt` を読み込める.
 
+- ML-CreateArchitecture で保存した定義は, その置き場 (`~/.ml-createarchitecture/models/<名前>.yaml`) から, または画面の「YAML」のダウンロードで, プロジェクトの中 (下の例では `models/`) に写して使う. 定義を直した場合は写し直す
+- 学習に使う Python (ML-Dashboard から起動する場合はプロジェクトの仮想環境) には, ML-Found と一緒にこのライブラリも入れる
+- 学習スクリプトは, 実行した時点のプロジェクトの定義のファイルから組み立てる. ML-Dashboard の「同じ設定でもう一度」で起動し直す場合も同じなので, 前の実験と同じモデルにしたい場合は, その実験の `model_spec.yaml` をプロジェクトの定義のファイルに写してから起動する
+
 ```yaml
 # configs/default/train.yaml (プロジェクト固有の項目)
 model:
