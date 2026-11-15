@@ -39,22 +39,30 @@ outputs:
 ```
 
 ```python
-from ml_modelcontrol import build_model, describe_units, infer, validate
+import torch
+from ml_modelcontrol import (
+    build_model, describe_units, dump_spec, export_python, get_unit, infer,
+    load_spec, validate
+)
 
 issues = validate("model.yaml")          # 誤りと注意 (ノードごと)
 result = infer("model.yaml")             # ノードごとの出力の形とパラメータ数
-model = build_model("model.yaml", seed=0)  # nn.Module
-logits = model(x)                        # 入力は定義の順の位置か, 名前のキーワード
+model = build_model("model.yaml", seed=0)  # nn.Module (GraphModel)
+logits = model(torch.zeros(4, 16))       # 入力は定義の順の位置か, 名前のキーワード
 units = describe_units()                 # 部品の一覧 (引数と口の説明付き. JSON にできる辞書)
 unit = get_unit("nn.Linear")             # 1 つの部品 (UnitSpec. 引数は unit.params)
 spec = load_spec("model.yaml")           # 定義の辞書 (版を今の版に直したもの)
-text = dump_spec(spec)                   # 決まったキーの順の YAML の文字
+text = dump_spec(spec)                   # 決まったキーの順の YAML の文字 (パスを渡すと保存)
+code = export_python("model.yaml")       # 同じ計算をする Python のコード (下を参照)
 ```
 
-`build_model` と `export_python` は, 誤りのある定義では `SpecError` を投げる (`error.issues` に `validate` と同じ形の誤りの一覧). 定義のファイルを読めない場合 (YAML の誤りなど) は `ValueError` (`validate` は `invalid_spec` の誤りとして返す). 組み立てたモデルの計算の途中で部品が誤りを出した場合は, どのノードで起きたかを誤りに添える (Python 3.11 以上).
+公開している名前は `GraphModel`, `SpecError`, `build_model`, `describe_spec_units`, `describe_units`, `dump_spec`, `embed_subgraph`, `export_python`, `get_unit`, `infer`, `list_examples`, `load_example`, `load_spec`, `register_unit`, `validate`, `__version__`.
 
-`infer` は, 定義に誤りがあっても, 誤りのあるノード (つなぎ先の無い口, 引数の誤り, 部品を作れないものなど) とその先のノードだけを除いて計算する (組み立ての途中でも形を確かめられるように). そのときの `ok` は `false` で, 除いたノードの `status` は `error` (誤りの文付き) か `skipped`, `params` は計算できた部分の合計. `build_model` と `export_python` は誤りのある定義では作らない.
+`validate` の 1 件は `{severity, code, message, node, location, subgraph}` の辞書 (`severity` は `error` か `warning`, `code` は `missing_param` などの決まった英字の識別子, `location` は `params.out_features` のような場所. 部分モデルの中の誤りは `node` が `None` で, `subgraph` に部分モデルの名前が入る).
 
+`build_model` と `export_python` は, 誤りのある定義では `SpecError` を投げる (`error.issues` に `validate` と同じ形の誤りの一覧). 定義のファイルを読めない場合は, YAML の誤りなどは `ValueError`, ファイルが無い場合は `FileNotFoundError` (`validate` はどちらも `invalid_spec` の誤りとして返す). 組み立てたモデルの計算の途中で部品が誤りを出した場合は, どのノードで起きたかを誤りに添える (Python 3.11 以上).
+
+`infer` は, 定義に誤りがあっても, 誤りのあるノード (つなぎ先の無い口, 引数の誤り, 部品を作れないものなど) とその先のノードだけを除いて計算する (組み立ての途中でも形を確かめられるように). そのときの `ok` は `false` で, 除いたノードの `status` は `error` (誤りの文付き) か `skipped`, `params` は計算できた部分の合計. `build_model` と `export_python` は誤りのある定義では作らない. 学習済みの重みとクラスの数のように, 形の推定では分からず組み立てで失敗する引数の組み合わせは, `validate` が `invalid_combination` の誤りとして返す.
 
 外部のライブラリの部品は, そのライブラリを入れると使える (無い場合は一覧に「使えない」と理由と入れ方が出る).
 
@@ -72,22 +80,23 @@ text = dump_spec(spec)                   # 決まったキーの順の YAML の�
 
 学習済みの重みを読む引数 (Hugging Face の `pretrained`, `tv.Model` の `weights`, `timm.Model` の `pretrained`, `smp` の `encoder_weights` など) は, 形の推定 (`infer`) では重みを読まない値に置き換える (組み立てでは書いた値のまま). Hugging Face のモデルは `params` の `model_name` に名前かローカルのパスを書く. 外部のコード (`trust_remote_code`) は使わない.
 
-同梱した例のモデルの定義 (全結合, 残差, 部分モデルの残差のブロックを重ねたもの, CNN, LSTM, Transformer のエンコーダー, GCN, BERT の分類) は `list_examples()` で一覧にし, `load_example("cnn_classifier")` で読み込める. 自分のモデルを書き始めるときの元にできる.
+同梱した例のモデルの定義 (全結合, 残差, 部分モデル (残差のブロック) を重ねたもの (`stacked_blocks`), CNN, LSTM, Transformer のエンコーダー, GCN, BERT の分類) は `list_examples()` で一覧にし, `load_example("cnn_classifier")` で読み込める. 自分のモデルを書き始めるときの元にできる.
 
-`export_python("model.yaml")` で, 同じ計算をする `nn.Module` のクラスの Python のコードを書き出せる (`state_dict` のキーは `build_model` と同じ). 書き出したコードはこのライブラリが無くても動く (演算 (`op.Add` など) と Hugging Face の部品のクラスの定義をコードに書き写す. 外部のライブラリ (PyTorch Geometric, timm など) の部品を使う場合は, そのライブラリは要る). `export_python(..., standalone=False)` にすると, 書き写さずに `from ml_modelcontrol import ops` などで読み込む.
+`export_python("model.yaml")` で, 同じ計算をする `nn.Module` のクラスの Python のコードを書き出せる (`state_dict` のキーは `build_model` と同じ). 書き出したコードはこのライブラリが無くても動く (演算 (`op.Add` など) と Hugging Face の部品のクラスの定義をコードに書き写す. 外部のライブラリ (PyTorch Geometric, timm など) の部品を使う場合は, そのライブラリは要る). `export_python(..., standalone=False)` にすると, 書き写さずに `from ml_modelcontrol import ops` などで読み込む. `path` を渡すとファイルに保存し, `class_name` で本体のクラスの名前 (既定 `Model`) を変えられる. 自作の部品は登録したクラスのモジュールから読み込む行を書く (関数の中や, 実行したスクリプトで定義したクラスは書き出せない).
 
-保存したモデルの定義は, 別の定義の中で 1 つの部品 (部分モデル) として使える. `embed_subgraph(spec, "block", "block.yaml")` で定義の `subgraphs` に写し, ノードの `unit` に `sub.block` と書く (部分モデルの入力が全て必須の入力の口, 出力が出力の口になり, 引数は持たない. 同じ部分モデルを何度使っても重みは別). 元のファイルを参照せずに写すので, 1 つのファイルだけで組み立てられる. 書き方は [docs/DESIGN.md](docs/DESIGN.md) の「部分モデル」.
+保存したモデルの定義は, 別の定義の中で 1 つの部品 (部分モデル) として使える. `embed_subgraph(spec, "block", "block.yaml")` で定義の `subgraphs` に写し, ノードの `unit` に `sub.block` と書く (部分モデルの入力が全て必須の入力の口 (入力の順に位置で渡す), 出力が出力の口になり, 引数は持たない. 同じ部分モデルを何度使っても重みは別). 元のファイルを参照せずに写すので, 1 つのファイルだけで組み立てられる. 元の定義を直した後に写し直す場合は `replace=True` を付ける. 書き方は [docs/DESIGN.md](docs/DESIGN.md) の「部分モデル」.
 
 ```python
 from ml_modelcontrol import describe_spec_units, embed_subgraph
 
 spec = embed_subgraph("model.yaml", "block", "block.yaml")  # 写した定義 (辞書)
-spec["nodes"]["b1"] = {"unit": "sub.block", "inputs": "x"}
-spec["outputs"] = {"y": "b1"}
+spec["nodes"]["b1"] = {"unit": "sub.block", "inputs": "add"}
+spec["nodes"]["head"]["inputs"] = "b1"  # add と head の間に部分モデルを挟む
 units = describe_spec_units(spec)        # 部分モデルの部品の一覧 (describe_units() に加えて使う)
+dump_spec(spec, "model.yaml")            # 写した定義を保存
 ```
 
-自作の部品は `register_unit(MyBlock, name="my.Block")` で登録すると, 定義の `unit` に書ける (`forward` が複数の値を返す場合は `outputs=["a", "b"]` で口の名前を付ける. 属性や辞書のキーで値を返す場合は `outputs={"logits": ["logits"], "last": ["hidden_states", -1]}` のように口ごとの取り出し方を書く).
+自作の部品は `register_unit(MyBlock, name="my.Block")` で登録すると, 定義の `unit` に書ける (`forward` が複数の値を返す場合は `outputs=["a", "b"]` で口の名前を付ける. 属性や辞書のキーで値を返す場合は `outputs={"logits": ["logits"], "last": ["hidden_states", -1]}` のように口ごとの取り出し方を書く. 引数の説明と範囲は `notes={"hidden": {"description": "中間の大きさ", "minimum": 1}}` のように付けられる. 名前の頭に組み込みの部品の頭 (`nn.`, `op.`, `sub.` など) は使えない).
 
 ## ML-Found で学習する
 

@@ -96,7 +96,8 @@ def validate(spec: Union[str, Path, dict]) -> list[dict]:
     Returns
     ----------
     issues: list[dict]
-        severity, code, message, node, location を持つ辞書のリスト
+        severity, code, message, node, location, subgraph を持つ辞書の
+        リスト
     """
     # 読み込めない定義 (形の誤り, 新しい版) は 1 件の誤り
     try:
@@ -1520,7 +1521,8 @@ def describe_spec_units(spec: Union[str, Path, dict]) -> list[dict]:
     Returns
     ----------
     units: list[dict]
-        部分モデルの名前の順の部品ごとの辞書 (誤りのあるものは使えない部品)
+        定義に書いた順の部分モデルの部品ごとの辞書 (誤りのあるものは
+        使えない部品)
     """
     # 部分モデルを確かめて部品にし, 作る関数を除いて辞書に変換
     loaded = load_spec(spec)
