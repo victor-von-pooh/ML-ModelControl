@@ -225,7 +225,7 @@ def embed_subgraph(
         写すモデルの定義, またはそのファイルのパス
     replace: bool = False
         同じ名前の部分モデルがある場合に置き換えるか (元の定義を直した後の
-        写し直し). 写す定義の部分モデルの名前の重なりは置き換えない
+        写し直し). 写す定義の中の部分モデルも, 同じ名前のものを置き換える
 
     Returns
     ----------
@@ -265,7 +265,7 @@ def embed_subgraph(
             "してください"
         )
     for key, value in nested.items():
-        if key in subgraphs and subgraphs[key] != value:
+        if key in subgraphs and subgraphs[key] != value and not replace:
             raise ValueError(
                 f"写す定義の部分モデル {key} と同じ名前で中身の違う部分モデルが"
                 "既にあります"

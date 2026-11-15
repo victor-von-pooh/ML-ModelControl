@@ -899,8 +899,14 @@ def check_outputs(
         ))
         return
     for name, ref in outputs.items():
+        # 出力の名前は書き出すコードでは辞書のキーなので, 書き出す変数の
+        # 名前との重なりは注意しない
+        found: list[Issue] = []
         check_name(
-            name, "出力", issues, node=False, location=f"outputs.{name}"
+            name, "出力", found, node=False, location=f"outputs.{name}"
+        )
+        issues.extend(
+            issue for issue in found if issue.code != "export_name"
         )
         check_ref(ref, input_names, nodes, issues, None, f"outputs.{name}")
 
@@ -1503,7 +1509,7 @@ def check_unused_subgraphs(
             analysis.issues.append(Issue(
                 "warning", "unused_subgraph",
                 f"部分モデル {name} はどのノードにも使われていません",
-                location=f"subgraphs.{name}"
+                location=f"subgraphs.{name}", subgraph=name
             ))
 
 
