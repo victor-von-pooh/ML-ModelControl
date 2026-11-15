@@ -26,6 +26,9 @@ RESERVED_NAMES = set(dir(nn.ModuleDict()))
 # 書き出す Python のコードで使う名前 (ノードと入力に付けると書き出せない)
 EXPORT_NAMES = {"self", "torch", "nn", "ops", "result", "_pick"}
 
+# 複数の入力をまとめる演算 (つなぎ先が 1 つだけなら注意)
+COMBINING_UNITS = {"op.Add", "op.Multiply", "op.Concat", "op.Stack"}
+
 # 入力の例に使える型と, 値の作り方
 DTYPES = {
     "float32", "float64", "float16", "bfloat16", "int64", "int32", "bool"
@@ -642,6 +645,21 @@ def check_node(
     analysis.connections[name] = check_connections(
         name, unit, node_inputs(node), input_names, nodes, issues
     )
+
+    # 複数の入力をまとめる演算に 1 つしかつないでいない場合 (つなぎ忘れ)
+    if unit.name in COMBINING_UNITS:
+        count = sum(
+            len(targets)
+            for port, targets in analysis.connections[name].items()
+            if any(item.name == port and item.variadic for item in unit.inputs)
+        )
+        if count == 1:
+            issues.append(Issue(
+                "warning", "single_input",
+                f"{unit.name} は複数の入力をまとめる演算ですが, つなぎ先が "
+                "1 つだけです (つなぎ忘れでなければ, このノードは要りません)",
+                node=name, location="inputs"
+            ))
 
 
 def check_combination(

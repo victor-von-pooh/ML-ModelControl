@@ -933,7 +933,7 @@ nodes:
 outputs:
   y: add
 """)
-    assert validate(spec) == []
+    assert [issue["code"] for issue in validate(spec)] == ["single_input"]
 
     # nodes がリストの場合は種類の誤り
     spec = make_spec()
@@ -1190,3 +1190,41 @@ def test_unused_input_message_and_combination():
     assert "invalid_combination" not in [
         issue["code"] for issue in validate(spec)
     ]
+
+
+def test_single_input_and_doc_summary():
+    """
+    まとめる演算のつなぎ先が 1 つの注意と, docstring の最初の文の部品の説明
+    を確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    from ml_modelcontrol.registry import docstring_summary
+
+    spec = {
+        "inputs": {"x": {"shape": [2, 4]}},
+        "nodes": {"add": {"unit": "op.Add", "inputs": {"xs": ["x"]}}},
+        "outputs": {"y": "add"}
+    }
+    assert [issue["code"] for issue in validate(spec)] == ["single_input"]
+    spec["nodes"]["add"]["inputs"] = {"xs": ["x", "x"]}
+    assert validate(spec) == []
+
+    class Documented(nn.Module):
+        """
+        The `"GCN" <https://example.com>`_ layer with :math:`x^2` from
+        :obj:`torch`. More text.
+
+        Args:
+            a: not part of the summary.
+        """
+
+    assert docstring_summary(Documented) == (
+        "The GCN layer with from torch."
+    )
