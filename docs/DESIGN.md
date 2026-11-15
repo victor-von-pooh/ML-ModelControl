@@ -130,7 +130,7 @@ nodes:
 | 出どころ | 名前の形 | 中身 |
 | --- | --- | --- |
 | `torch.nn` | `nn.<クラス名>` | `torch.nn` の層. 引数と入力の口はシグネチャから取り出し, よく使うものには説明と範囲を付ける (入れ物, 損失関数, 遅延初期化の `Lazy*` は除く) |
-| 演算 | `op.<名前>` | `Add`, `Multiply`, `Concat`, `Stack`, `Reshape`, `Permute`, `Transpose`, `Mean`, `Select` (タプルの要素), `GetAttr` (出力の属性) など. `torch.nn.functional` は使わず, 全てモジュールとして作る |
+| 演算 | `op.<名前>` | `Add`, `Multiply`, `Concat`, `Stack`, `Reshape`, `Permute`, `Transpose`, `Mean`, `Select` (タプルの要素), `GetAttr` (出力の属性), `Index` (テンソルの決めた次元の 1 つ. 先頭のトークンなど), `Positions` (位置の番号. 位置の埋め込みの入力), `Equal` (等しい所の印. 詰め物から注意の印) など. `torch.nn.functional` は使わず, 全てモジュールとして作る |
 | PyTorch Geometric | `pyg.<クラス名>` | `torch_geometric.nn` の畳み込みの層と集約の層. ライブラリが入っている場合だけ使える |
 | Hugging Face | `hf.AutoModel`, `hf.AutoModelForImageClassification` など | モデルの名前 (またはローカルのパス) から読み込む. 文 (`input_ids`) を受け取る種類と画像 (`pixel_values`) を受け取る種類がある. 重みを読むか, 設定だけから作るかを選べる. ライブラリが入っている場合だけ使える |
 | torchvision | `tv.<クラス名>`, `tv.Model` | `torchvision.ops` の層 (`DeformConv2d`, `SqueezeExcitation`, `StochasticDepth` など) と, 名前で作るモデル (`tv.Model`. `resnet18` などを `torchvision.models.get_model` で作る) |

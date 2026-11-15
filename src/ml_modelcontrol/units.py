@@ -285,6 +285,14 @@ OPS = [
      "index 番目を取り出す (タプルやリストは要素, テンソルは最初の次元)",
      False),
     ("GetAttr", ops.GetAttr, "出力から name の属性かキーの値を取り出す",
+     False),
+    ("Index", ops.Index,
+     "テンソルの dim の次元の index 番目を取り出す (例: 先頭のトークン)",
+     False),
+    ("Positions", ops.Positions,
+     "(バッチ, 長さ) の位置の番号を作る (位置の埋め込みの入力)", False),
+    ("Equal", ops.Equal,
+     "値が value に等しい所を True にする (例: 詰め物の番号から注意の印)",
      False)
 ]
 
@@ -313,6 +321,16 @@ OP_PARAM_NOTES = {
     },
     "GetAttr": {
         "name": {"description": "取り出す属性かキーの名前 (例: last_hidden_state)"}
+    },
+    "Index": {
+        "dim": {"description": "取り出す次元 (バッチも含む. 例: 文の位置は 1)"},
+        "index": {"description": "取り出す番号 (負の数は後ろから)"}
+    },
+    "Positions": {
+        "start": {"description": "最初の位置の番号"}
+    },
+    "Equal": {
+        "value": {"description": "比べる値 (例: 詰め物の番号 0)"}
     }
 }
 
