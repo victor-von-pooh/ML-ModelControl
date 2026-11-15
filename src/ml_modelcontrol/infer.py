@@ -210,6 +210,95 @@ def incoming_text(model: Any, name: str, values: dict[str, Any]) -> str:
     return text
 
 
+# 入る値の次元と比べる引数 (引数の名前と, 比べる次元の位置と説明)
+SHAPE_PARAMS = {
+    "in_features": (-1, "最後の次元"),
+    "normalized_shape": (-1, "最後の次元"),
+    "in_channels": (1, "チャネル (2 番目の次元)"),
+    "num_features": (1, "チャネル (2 番目の次元)"),
+    "num_channels": (1, "チャネル (2 番目の次元)"),
+}
+
+# 番号 (整数) を受け取る部品と, 小数を受け取る部品の分類
+INDEX_UNITS = {"nn.Embedding", "nn.EmbeddingBag"}
+
+
+def shape_hint(
+    model: Any, spec: dict, name: str, values: dict[str, Any]
+) -> str:
+    """
+    計算に失敗したノードの, よくある形と型の食い違いの直し方を返す関数
+
+    最初の口に入った値の次元と引数 (in_features, in_channels など) の
+    食い違いと, 番号を受け取る部品に小数が入った場合などを日本語で示す
+
+    Parameters
+    ----------
+    model: Any
+        組み立てたモデル (GraphModel)
+    spec: dict
+        モデルの定義
+    name: str
+        ノードの名前
+    values: dict[str, Any]
+        入力と, 前に計算したノードの戻り値
+
+    Returns
+    ----------
+    hint: str
+        「 → 直し方」の文, 分からない場合は空
+    """
+    # 最初の口に入ったテンソルの形と型
+    targets = next(iter(model.connections.get(name, {}).values()), [])
+    if not targets:
+        return ""
+    try:
+        info = describe(model.resolve(values, targets[0]))
+    except Exception:
+        return ""
+    if info.get("kind") != "tensor":
+        return ""
+    shape = info.get("shape") or []
+    dtype = str(info.get("dtype"))
+    node = spec["nodes"][name]
+    params = node.get("params") or {}
+    unit = model.unit_names.get(name, "")
+
+    # 番号と小数の食い違い
+    hints = []
+    if unit in INDEX_UNITS and not dtype.startswith("int"):
+        hints.append(
+            f"{unit} には番号 (int64) を入れてください (入った値は {dtype})"
+        )
+    elif dtype.startswith("int") and any(
+        key in params for key in SHAPE_PARAMS
+    ):
+        hints.append(
+            f"{dtype} の値が入っています. 小数 (float32) の値を入れてください"
+        )
+
+    # 次元と引数の食い違い
+    for key, (axis, label) in SHAPE_PARAMS.items():
+        value = params.get(key)
+        if isinstance(value, list) and len(value) == 1:
+            value = value[0]
+        if not isinstance(value, int) or isinstance(value, bool):
+            continue
+        if len(shape) <= max(axis, -axis - 1):
+            hints.append(
+                f"入った値は {len(shape)} 次元で, {key} と比べる{label}が"
+                "ありません"
+            )
+        elif shape[axis] != value:
+            hints.append(
+                f"入る値の{label} {shape[axis]} と {key} {value} が合いません "
+                f"({key} を {shape[axis]} にするか, 前のノードを直してください)"
+            )
+    hint = f" → {'. '.join(hints)}" if hints else ""
+
+    return hint
+
+
 def infer(
     spec: Union[str, Path, dict], max_params: int = MAX_PARAMS,
     max_input_elements: int = MAX_INPUT_ELEMENTS
@@ -535,7 +624,7 @@ def run_nodes(
                 entry["status"] = "error"
                 entry["error"] = describe_error(error) + incoming_text(
                     model, name, values
-                )
+                ) + shape_hint(model, spec, name, values)
                 failed[name] = entry["error"]
     result["params"] = total
     result["trainable"] = trainable
