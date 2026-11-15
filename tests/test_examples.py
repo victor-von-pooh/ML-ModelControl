@@ -166,3 +166,28 @@ def test_standalone_export_conflicts(
         code = export_python(load_example("residual_mlp"))
     assert "from ml_modelcontrol import ops" in code
 
+
+
+def test_merge_imports() -> None:
+    """
+    同じモジュールから読み込む行を 1 行にまとめることを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    from ml_modelcontrol.export import merge_imports
+
+    assert merge_imports([
+        "import torch", "", "from torch import nn",
+        "from torch_geometric.nn import GCNConv",
+        "from torch_geometric.nn import MeanAggregation",
+        "from torch_geometric.nn import GCNConv"
+    ]) == [
+        "import torch", "", "from torch import nn",
+        "from torch_geometric.nn import GCNConv, MeanAggregation"
+    ]
