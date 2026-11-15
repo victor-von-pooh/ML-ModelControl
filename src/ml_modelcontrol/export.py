@@ -1,4 +1,8 @@
+import importlib
+import inspect
 import keyword
+import re
+import warnings
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -76,9 +80,19 @@ PICK_CODE = [
 ]
 
 
+# このライブラリの部品のクラスを読み込む行と, そのクラスのモジュール
+# (単独で動くコードではクラスの定義を書き写して置き換える)
+OWN_IMPORTS = {
+    "from ml_modelcontrol import ops": "ml_modelcontrol.ops",
+    "from ml_modelcontrol.external import HuggingFaceModel": (
+        "ml_modelcontrol.external"
+    )
+}
+
+
 def export_python(
     spec: Union[str, Path, dict], class_name: str = "Model",
-    path: Optional[Union[str, Path]] = None
+    path: Optional[Union[str, Path]] = None, standalone: bool = True
 ) -> str:
     """
     モデルの定義から, 同じ計算をする nn.Module のクラスの Python のコードを
@@ -95,6 +109,10 @@ def export_python(
         クラスの名前
     path: Optional[Union[str, Path]] = None
         保存先, None の場合は保存しない
+    standalone: bool = True
+        このライブラリを入れなくても動くコードにするか. 演算 (op.Add など)
+        と Hugging Face の部品のクラスの定義をコードに書き写す. False の
+        場合は ml_modelcontrol から読み込む
 
     Returns
     ----------
@@ -146,9 +164,18 @@ def export_python(
         f"{spec.get('name', class_name)} のモデル (ML-ModelControl の定義から"
         "書き出したコード)"
     )
+    # 単独で動くコードでは, このライブラリの部品のクラスを書き写し
+    copied: list[str] = []
+    renames: dict[str, str] = {}
+    if standalone:
+        imports, copied, renames = copy_own_classes(graphs, imports, names)
     lines = [repr(title), *imports]
+    for block in copied:
+        lines += ["", "", *block.splitlines()]
     for name, graph, graph_analysis in graphs:
-        lines += ["", "", *class_code(graph, graph_analysis, name)]
+        lines += [
+            "", "", *class_code(graph, graph_analysis, name, renames)
+        ]
     if any("_pick(" in line for line in lines):
         start = lines.index(f"class {graphs[0][0]}(nn.Module):")
         lines[start:start] = PICK_CODE
@@ -190,7 +217,111 @@ def used_units(spec: dict, analysis: Any) -> set[str]:
     return names
 
 
-def class_code(spec: dict, analysis: Any, class_name: str) -> list[str]:
+def copy_own_classes(
+    graphs: list, imports: list[str], class_names: list[str]
+) -> tuple[list[str], list[str], dict[str, str]]:
+    """
+    このライブラリの部品の読み込みをクラスの定義の書き写しに置き換える関数
+
+    書き写すクラスが使う名前 (torch, Any, Optional, importlib) の import を
+    クラスの中身から決めて加える. クラスの中身を読めない環境 (ソースの無い
+    インストール) では, 書き写さずに読み込む行を残して注意を出す
+
+    Parameters
+    ----------
+    graphs: list
+        書き出すクラスの名前, 定義, 解析の組
+    imports: list[str]
+        読み込む行
+    class_names: list[str]
+        書き出すクラスの名前 (書き写すクラスとの重なりの確認)
+
+    Returns
+    ----------
+    imports: list[str]
+        このライブラリの読み込みを除き, 書き写したクラスが使う行を加えた
+        読み込む行 (標準ライブラリ, torch, その他の順)
+    copied: list[str]
+        書き写したクラスの定義 (使う順)
+    renames: dict[str, str]
+        部品を作る式の名前の置き換え (ops.Add を Add に)
+
+    Raises
+    ----------
+    ValueError
+        書き写すクラスの名前が, 書き出すクラスや読み込む名前と重なる場合
+    """
+    # 他の読み込む行が持ち込む名前 (from x import A の A, import x の x)
+    kept = [line for line in imports if line not in OWN_IMPORTS]
+    bound = {
+        name.strip().split(" as ")[-1]
+        for line in kept
+        for name in line.split(" import ", 1)[-1].split(",")
+    }
+
+    # 使う部品のクラスの書き写しと, 書き写したクラスが使う名前の収集
+    copied: list[str] = []
+    renames: dict[str, str] = {}
+    used: set[str] = set()
+    fallback: list[str] = []
+    for _, _, graph_analysis in graphs:
+        for name in graph_analysis.order:
+            unit = graph_analysis.units[name]
+            if unit.code_import not in OWN_IMPORTS:
+                continue
+            if unit.code_name in renames or unit.code_import in fallback:
+                continue
+            short = unit.code_name.split(".")[-1]
+            module = importlib.import_module(OWN_IMPORTS[unit.code_import])
+            try:
+                source = inspect.getsource(getattr(module, short))
+            except (OSError, TypeError):
+                warnings.warn(
+                    f"{unit.code_name} のクラスの中身を読めないので, 書き出す"
+                    "コードは ml_modelcontrol を読み込みます", stacklevel=3
+                )
+                fallback.append(unit.code_import)
+                continue
+            if short in class_names or short in bound:
+                raise ValueError(
+                    f"部品のクラス {short} の名前が, 書き出すクラスか読み込む"
+                    "クラスの名前と重なります. 名前を変えるか, "
+                    "standalone=False で書き出してください"
+                )
+            copied.append(source)
+            renames[unit.code_name] = short
+            used |= {
+                word for word in ("importlib", "torch", "Any", "Optional")
+                if re.search(rf"\b{word}\b", source)
+            }
+
+    # 書き写したクラスが使う名前と, 書き出すクラスの名前の重なりの確認
+    overlap = used & set(class_names)
+    if overlap:
+        raise ValueError(
+            f"クラスの名前 {sorted(overlap)} は, 書き写した部品のクラスが使う"
+            "名前と重なるので使えません"
+        )
+
+    # 標準ライブラリ, torch, その他の順の読み込む行
+    standard = ["import importlib"] if "importlib" in used else []
+    typing_names = [name for name in ("Any", "Optional") if name in used]
+    if typing_names:
+        standard.append(f"from typing import {', '.join(typing_names)}")
+    first = ["import torch"] if "torch" in used else []
+    # (標準ライブラリの後は 1 行空ける)
+    imports = [
+        *standard, *([""] if standard else []), *first,
+        *[line for line in imports if line in fallback], *kept
+    ]
+
+    return imports, copied, renames
+
+
+def class_code(
+    spec: dict, analysis: Any, class_name: str,
+    renames: Optional[dict[str, str]] = None
+) -> list[str]:
     """
     1 つの定義 (本体か部分モデル) の nn.Module のクラスの行を作る関数
 
@@ -202,6 +333,8 @@ def class_code(spec: dict, analysis: Any, class_name: str) -> list[str]:
         定義の解析の結果
     class_name: str
         クラスの名前
+    renames: Optional[dict[str, str]] = None
+        部品を作る式の名前の置き換え (書き写したクラス)
 
     Returns
     ----------
@@ -218,8 +351,9 @@ def class_code(spec: dict, analysis: Any, class_name: str) -> list[str]:
         "        self.nodes = nn.ModuleDict({"
     ]
     for name in analysis.order:
+        code = analysis.units[name].code_name
         lines += wrap_call(
-            f"            {name!r}: {analysis.units[name].code_name}(",
+            f"            {name!r}: {(renames or {}).get(code, code)}(",
             build_args(spec, analysis, name), "),", "            "
         )
     lines.append("        })")

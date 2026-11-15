@@ -74,7 +74,7 @@ text = dump_spec(spec)                   # 決まったキーの順の YAML の�
 
 同梱した例のモデルの定義 (全結合, 残差, CNN, LSTM, Transformer のエンコーダー, GCN, BERT の分類) は `list_examples()` で一覧にし, `load_example("cnn_classifier")` で読み込める. 自分のモデルを書き始めるときの元にできる.
 
-`export_python("model.yaml")` で, 同じ計算をする `nn.Module` のクラスの Python のコードを書き出せる (`state_dict` のキーは `build_model` と同じ). 演算 (`op.Add` など) と Hugging Face の部品を使う場合, 書き出したコードは `ml_modelcontrol` を読み込む (`from ml_modelcontrol import ops` など) ので, 動かす環境にもこのライブラリを入れる.
+`export_python("model.yaml")` で, 同じ計算をする `nn.Module` のクラスの Python のコードを書き出せる (`state_dict` のキーは `build_model` と同じ). 書き出したコードはこのライブラリが無くても動く (演算 (`op.Add` など) と Hugging Face の部品のクラスの定義をコードに書き写す. 外部のライブラリ (PyTorch Geometric, timm など) の部品を使う場合は, そのライブラリは要る). `export_python(..., standalone=False)` にすると, 書き写さずに `from ml_modelcontrol import ops` などで読み込む.
 
 保存したモデルの定義は, 別の定義の中で 1 つの部品 (部分モデル) として使える. `embed_subgraph(spec, "block", "block.yaml")` で定義の `subgraphs` に写し, ノードの `unit` に `sub.block` と書く (部分モデルの入力が全て必須の入力の口, 出力が出力の口になり, 引数は持たない. 同じ部分モデルを何度使っても重みは別). 元のファイルを参照せずに写すので, 1 つのファイルだけで組み立てられる. 書き方は [docs/DESIGN.md](docs/DESIGN.md) の「部分モデル」.
 
