@@ -171,6 +171,45 @@ def describe_error(error: Exception) -> str:
     return message
 
 
+def incoming_text(model: Any, name: str, values: dict[str, Any]) -> str:
+    """
+    計算に失敗したノードに入った値の形と型を, 誤りの文に添える文にする関数
+
+    形や型の合わない誤りを, 前のノードを見に行かずに直せるようにする
+
+    Parameters
+    ----------
+    model: Any
+        組み立てたモデル (GraphModel)
+    name: str
+        ノードの名前
+    values: dict[str, Any]
+        入力と, 前に計算したノードの戻り値
+
+    Returns
+    ----------
+    text: str
+        「 (入った値: x [4, 16] float32, ...)」, 分からない場合は空
+    """
+    # 口ごとのつなぎ先の値の形と型 (テンソルでない値は種類だけ)
+    parts = []
+    for port, targets in model.connections.get(name, {}).items():
+        for target in targets:
+            try:
+                info = describe(model.resolve(values, target))
+            except Exception:
+                continue
+            if info.get("kind") == "tensor":
+                parts.append(
+                    f"{port} {info.get('shape')} {info.get('dtype')}"
+                )
+            else:
+                parts.append(f"{port} {info.get('kind')}")
+    text = f" (入った値: {', '.join(parts)})" if parts else ""
+
+    return text
+
+
 def infer(
     spec: Union[str, Path, dict], max_params: int = MAX_PARAMS,
     max_input_elements: int = MAX_INPUT_ELEMENTS
@@ -492,7 +531,9 @@ def run_nodes(
                     )
             except Exception as error:
                 entry["status"] = "error"
-                entry["error"] = describe_error(error)
+                entry["error"] = describe_error(error) + incoming_text(
+                    model, name, values
+                )
                 failed[name] = entry["error"]
     result["params"] = total
     result["trainable"] = trainable
