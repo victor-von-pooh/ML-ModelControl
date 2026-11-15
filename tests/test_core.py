@@ -1301,3 +1301,41 @@ def test_error_shape_hints():
     assert "最後の次元 16 と in_features 8 が合いません" in nodes["fc"]["error"]
     assert "番号 (int64) を入れてください" in nodes["emb"]["error"]
     assert "in_channels を 3 にする" in nodes["conv"]["error"]
+
+
+def test_token_ops() -> None:
+    """
+    位置の番号, 等しい所の印, 決めた次元の取り出しの演算を確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    from ml_modelcontrol import ops
+
+    # 位置の番号はバッチの数だけ並べた (バッチ, 長さ) の整数
+    ids = torch.tensor([[5, 6, 0], [7, 0, 0]])
+    positions = ops.Positions()(ids)
+    assert positions.tolist() == [[0, 1, 2], [0, 1, 2]]
+    assert positions.dtype == torch.int64
+    assert ops.Positions(start=1)(torch.zeros(1, 2, 4))[0].tolist() == [1, 2]
+
+    # 詰め物 (0) の印と, 先頭の取り出し
+    assert ops.Equal(0)(ids).tolist() == [
+        [False, False, True], [False, True, True]
+    ]
+    hidden = torch.arange(24.0).reshape(2, 3, 4)
+    assert torch.equal(ops.Index(1, 0)(hidden), hidden[:, 0])
+
+    # 部品から組んだ BERT の例は, 詰め物を変えても先頭の出力が変わらない
+    from ml_modelcontrol import load_example
+
+    model = build_model(load_example("tiny_bert"), seed=0).eval()
+    short = torch.tensor([[3, 4, 5, 0, 0]])
+    longer = torch.tensor([[3, 4, 5, 0, 0, 0, 0]])
+    with torch.no_grad():
+        assert torch.allclose(model(short), model(longer), atol=1e-5)

@@ -280,3 +280,108 @@ class GetAttr(nn.Module):
             value = getattr(input, self.name)
 
         return value
+
+
+class Index(nn.Module):
+    def __init__(self, dim: int = 1, index: int = 0):
+        # 親クラスのコンストラクタを呼び出す
+        super(Index, self).__init__()
+
+        # 取り出す次元と番号を保存
+        self.dim = dim
+        self.index = index
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        """
+        決めた次元の決めた番号を取り出す関数 (その次元は無くなる)
+
+        文の先頭のトークン ([CLS]) の表現 (dim 1, index 0) などに使う
+
+        Parameters
+        ----------
+        input: torch.Tensor
+            取り出すテンソル
+
+        Returns
+        ----------
+        item: torch.Tensor
+            取り出したテンソル
+        """
+        item = input.select(self.dim, self.index)
+
+        return item
+
+
+class Positions(nn.Module):
+    def __init__(self, start: int = 0):
+        # 親クラスのコンストラクタを呼び出す
+        super(Positions, self).__init__()
+
+        # 最初の位置の番号を保存
+        self.start = start
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        """
+        (バッチ, 長さ, ...) の入力から, 位置の番号 (start, start + 1, ...)
+        を (バッチ, 長さ) の整数で作る関数
+
+        位置の埋め込み (nn.Embedding) の入力に使う
+
+        Parameters
+        ----------
+        input: torch.Tensor
+            2 次元以上のテンソル (値は使わず, 形と置き場だけを使う)
+
+        Returns
+        ----------
+        positions: torch.Tensor
+            (バッチ, 長さ) の int64
+
+        Raises
+        ----------
+        ValueError
+            入力が 1 次元以下の場合
+        """
+        # 位置の番号をバッチの数だけ並べたテンソル (後の層が書き換えても
+        # よいように連続したメモリ)
+        if input.dim() < 2:
+            raise ValueError(
+                "2 次元以上 (バッチ, 長さ, ...) の入力を入れてください"
+            )
+        length = input.shape[1]
+        line = torch.arange(
+            self.start, self.start + length, device=input.device
+        )
+        positions = line.unsqueeze(0).repeat(input.shape[0], 1)
+
+        return positions
+
+
+class Equal(nn.Module):
+    def __init__(self, value: float = 0.0):
+        # 親クラスのコンストラクタを呼び出す
+        super(Equal, self).__init__()
+
+        # 比べる値を保存
+        self.value = value
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        """
+        値が決めた値に等しい所を True にする関数
+
+        詰め物の番号 (0) から, 注意で見ない位置の印 (nn.MultiheadAttention
+        の key_padding_mask) を作るのに使う
+
+        Parameters
+        ----------
+        input: torch.Tensor
+            比べるテンソル
+
+        Returns
+        ----------
+        mask: torch.Tensor
+            同じ形の bool のテンソル
+        """
+        mask = input == self.value
+
+        return mask

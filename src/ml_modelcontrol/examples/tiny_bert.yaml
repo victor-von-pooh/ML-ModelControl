@@ -1,0 +1,106 @@
+format_version: 1
+name: tiny_bert
+description: 学習済みの重みを使わずに部品から組んだ小さな BERT (語と位置の埋め込み, 自己注意と全結合の 2 ブロック, 先頭のトークンで分類). 番号 0 を詰め物として注意で見ない
+inputs:
+  ids: {shape: [2, 16], dtype: int64, fill: ones, ui: {x: 0, y: 160}}
+nodes:
+  tok:
+    unit: nn.Embedding
+    params: {num_embeddings: 1000, embedding_dim: 64}
+    inputs: ids
+    ui: {x: 240, y: 60}
+  positions:
+    unit: op.Positions
+    inputs: ids
+    ui: {x: 240, y: 200}
+  pos:
+    unit: nn.Embedding
+    params: {num_embeddings: 128, embedding_dim: 64}
+    inputs: positions
+    ui: {x: 480, y: 200}
+  pad:
+    unit: op.Equal
+    params: {value: 0}
+    inputs: ids
+    ui: {x: 240, y: 340}
+  emb:
+    unit: op.Add
+    inputs: {xs: [tok, pos]}
+    ui: {x: 720, y: 100}
+  emb_norm:
+    unit: nn.LayerNorm
+    params: {normalized_shape: 64}
+    inputs: emb
+    ui: {x: 960, y: 100}
+  block1:
+    unit: sub.encoder_block
+    inputs: {x: emb_norm, pad_mask: pad}
+    ui: {x: 1200, y: 160}
+  block2:
+    unit: sub.encoder_block
+    inputs: {x: block1, pad_mask: pad}
+    ui: {x: 1440, y: 160}
+  cls:
+    unit: op.Index
+    params: {dim: 1, index: 0}
+    inputs: block2
+    ui: {x: 1680, y: 160}
+  head:
+    unit: nn.Linear
+    params: {in_features: 64, out_features: 2}
+    inputs: cls
+    ui: {x: 1920, y: 160}
+outputs:
+  logits: head
+subgraphs:
+  encoder_block:
+    description: 自己注意と全結合を, それぞれ残差と正規化で包んだ Transformer のエンコーダーの 1 層 (64 次元, 4 ヘッド)
+    inputs:
+      x: {shape: [2, 16, 64], ui: {x: 0, y: 100}}
+      pad_mask: {shape: [2, 16], dtype: bool, ui: {x: 0, y: 300}}
+    nodes:
+      attn:
+        unit: nn.MultiheadAttention
+        params: {embed_dim: 64, num_heads: 4, batch_first: true}
+        inputs: {query: x, key: x, value: x, key_padding_mask: pad_mask}
+        ui: {x: 240, y: 160}
+      add1:
+        unit: op.Add
+        inputs: {xs: [x, "attn:output"]}
+        ui: {x: 480, y: 100}
+      norm1:
+        unit: nn.LayerNorm
+        params: {normalized_shape: 64}
+        inputs: add1
+        ui: {x: 720, y: 100}
+      ff1:
+        unit: nn.Linear
+        params: {in_features: 64, out_features: 128}
+        inputs: norm1
+        ui: {x: 960, y: 220}
+      act:
+        unit: nn.GELU
+        inputs: ff1
+        ui: {x: 1200, y: 220}
+      ff2:
+        unit: nn.Linear
+        params: {in_features: 128, out_features: 64}
+        inputs: act
+        ui: {x: 1440, y: 220}
+      add2:
+        unit: op.Add
+        inputs: {xs: [norm1, ff2]}
+        ui: {x: 1680, y: 100}
+      norm2:
+        unit: nn.LayerNorm
+        params: {normalized_shape: 64}
+        inputs: add2
+        ui: {x: 1920, y: 100}
+    outputs:
+      y: norm2
+    ui:
+      outputs:
+        y: {x: 2160, y: 100}
+ui:
+  outputs:
+    logits: {x: 2160, y: 160}
