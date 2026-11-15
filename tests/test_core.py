@@ -1233,3 +1233,28 @@ def test_single_input_and_doc_summary():
     assert docstring_summary(Documented) == (
         "The GCN layer with from torch."
     )
+
+
+def test_error_shows_incoming_values():
+    """
+    計算に失敗したノードの誤りの文に, 入った値の形と型を添えることを確かめる
+    関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    spec = {
+        "inputs": {"x": {"shape": [4, 16]}},
+        "nodes": {"fc": {
+            "unit": "nn.Linear", "inputs": "x",
+            "params": {"in_features": 8, "out_features": 2}
+        }},
+        "outputs": {"y": "fc"}
+    }
+    error = infer(spec)["nodes"]["fc"]["error"]
+    assert error.endswith("(入った値: input [4, 16] float32)")
