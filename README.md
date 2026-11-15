@@ -15,9 +15,14 @@ git clone https://github.com/victor-von-pooh/ML-ModelControl.git
 cd ML-ModelControl
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"                          # 基本
-pip install -e ".[dev,all]"    # 外部のライブラリの部品も全て使う場合 (ライブラリごとに [geometric], [timm] なども選べる)
+pip install -e .                 # 使うだけの場合
+pip install -e ".[dev]"          # テスト (pytest) も動かす場合
+pip install -e ".[dev,all]"      # 外部のライブラリの部品も全て使う場合 (ライブラリごとに [geometric], [timm] なども選べる)
 ```
+
+- PyPI には公開していないので, clone したディレクトリで入れる. 別の環境 (学習のプロジェクトの仮想環境など) に入れる場合は, `pip install -e <clone したディレクトリ>` か `pip install "ml-modelcontrol @ git+https://github.com/victor-von-pooh/ML-ModelControl.git"` (任意の依存は `ml-modelcontrol[geometric] @ git+...`)
+- PyTorch は, 先に [PyTorch の手順](https://pytorch.org/get-started/locally/) で環境 (CPU, CUDA) に合わせて入れておくと, 大きな版を入れ直さずに済む
+- Python 3.10 から 3.13 で確かめている. PyTorch Geometric は Python 3.15 では読み込めない (ライブラリの側の問題) ので, グラフの部品を使う場合は 3.13 までを使う
 
 ## 使い方
 
@@ -56,11 +61,13 @@ text = dump_spec(spec)                   # 決まったキーの順の YAML の�
 code = export_python("model.yaml")       # 同じ計算をする Python のコード (下を参照)
 ```
 
+`validate`, `infer`, `build_model`, `export_python` は, ファイルのパスの代わりに定義の辞書 (`load_spec` で読んだものや, 手で作ったもの) も受け取る. `load_spec` は読み込みと版を直すことだけをし, 誤りは確かめない (確かめるのは `validate`).
+
 公開している名前は `GraphModel`, `SpecError`, `build_model`, `describe_spec_units`, `describe_units`, `dump_spec`, `embed_subgraph`, `export_python`, `get_unit`, `infer`, `list_examples`, `load_example`, `load_spec`, `register_unit`, `validate`, `__version__`.
 
 `validate` の 1 件は `{severity, code, message, node, location, subgraph}` の辞書 (`severity` は `error` か `warning`, `code` は `missing_param` などの決まった英字の識別子, `location` は `params.out_features` のような場所. 部分モデルの中の誤りは `node` が `None` で, `subgraph` に部分モデルの名前が入る).
 
-`build_model` と `export_python` は, 誤りのある定義では `SpecError` を投げる (`error.issues` に `validate` と同じ形の誤りの一覧). 定義のファイルを読めない場合は, YAML の誤りなどは `ValueError`, ファイルが無い場合は `FileNotFoundError` (`validate` はどちらも `invalid_spec` の誤りとして返す). 組み立てたモデルの計算の途中で部品が誤りを出した場合は, どのノードで起きたかを誤りに添える (Python 3.11 以上).
+`build_model` と `export_python` は, 誤りのある定義では `SpecError` を投げる (`error.issues` に `validate` と同じ形の誤りの一覧). 定義のファイルを読めない場合は, YAML の誤りやライブラリより新しい版 (`format_version`) などは `ValueError`, ファイルが無い場合は `FileNotFoundError` (`validate` はどちらも `invalid_spec` の誤りとして返す. `infer` と `load_spec` は投げる). 組み立てたモデルの計算の途中で部品が誤りを出した場合は, どのノードで起きたかを誤りに添える (Python 3.11 以上).
 
 `infer` は, 定義に誤りがあっても, 誤りのあるノード (つなぎ先の無い口, 引数の誤り, 部品を作れないものなど) とその先のノードだけを除いて計算する (組み立ての途中でも形を確かめられるように). そのときの `ok` は `false` で, 除いたノードの `status` は `error` (誤りの文付き) か `skipped`, `params` は計算できた部分の合計. `build_model` と `export_python` は誤りのある定義では作らない. 学習済みの重みとクラスの数のように, 形の推定では分からず組み立てで失敗する引数の組み合わせは, `validate` が `invalid_combination` の誤りとして返す.
 
@@ -86,72 +93,134 @@ code = export_python("model.yaml")       # 同じ計算をする Python のコ�
 
 保存したモデルの定義は, 別の定義の中で 1 つの部品 (部分モデル) として使える. `embed_subgraph(spec, "block", "block.yaml")` で定義の `subgraphs` に写し, ノードの `unit` に `sub.block` と書く (部分モデルの入力が全て必須の入力の口 (入力の順に位置で渡す), 出力が出力の口になり, 引数は持たない. 同じ部分モデルを何度使っても重みは別). 元のファイルを参照せずに写すので, 1 つのファイルだけで組み立てられる. 元の定義を直した後に写し直す場合は `replace=True` を付ける. 書き方は [docs/DESIGN.md](docs/DESIGN.md) の「部分モデル」.
 
+```yaml
+# block.yaml (入力 1 つ, 出力 1 つの残差のブロック. 入力の shape は書かなくてよい)
+format_version: 1
+name: block
+inputs:
+  x: {}
+nodes:
+  fc: {unit: nn.Linear, params: {in_features: 16, out_features: 16}, inputs: x}
+  act: {unit: nn.ReLU, inputs: fc}
+  add: {unit: op.Add, inputs: {xs: [x, act]}}
+outputs:
+  out: add
+```
+
 ```python
-from ml_modelcontrol import describe_spec_units, embed_subgraph
+from ml_modelcontrol import describe_spec_units, dump_spec, embed_subgraph
 
 spec = embed_subgraph("model.yaml", "block", "block.yaml")  # 写した定義 (辞書)
 spec["nodes"]["b1"] = {"unit": "sub.block", "inputs": "add"}
 spec["nodes"]["head"]["inputs"] = "b1"  # add と head の間に部分モデルを挟む
 units = describe_spec_units(spec)        # 部分モデルの部品の一覧 (describe_units() に加えて使う)
-dump_spec(spec, "model.yaml")            # 写した定義を保存
+dump_spec(spec, "model_with_block.yaml")  # 写した定義を別の名前で保存
 ```
+
+部分モデルの出力が 1 つなら, 使うノードはノードの名前だけでつなぎ先にできる. 2 つ以上なら「ノードの名前:出力の名前」で選ぶ.
 
 自作の部品は `register_unit(MyBlock, name="my.Block")` で登録すると, 定義の `unit` に書ける (`forward` が複数の値を返す場合は `outputs=["a", "b"]` で口の名前を付ける. 属性や辞書のキーで値を返す場合は `outputs={"logits": ["logits"], "last": ["hidden_states", -1]}` のように口ごとの取り出し方を書く. 引数の説明と範囲は `notes={"hidden": {"description": "中間の大きさ", "minimum": 1}}` のように付けられる. 名前の頭に組み込みの部品の頭 (`nn.`, `op.`, `sub.` など) は使えない).
 
 ## ML-Found で学習する
 
-組み立てたモデルは普通の `nn.Module` なので, [ML-Found](https://github.com/victor-von-pooh/ML-Found) の `Trainer` にそのまま渡せる. 定義のファイルの置き場をプロジェクトの config に書き, 学習スクリプトで組み立てる. 定義のファイルは実験の出力先に写しておくと, 後から同じモデルを作って `final_model.pt` を読み込める.
+組み立てたモデルは普通の `nn.Module` なので, PyTorch の学習の基盤 [ML-Found](https://github.com/victor-von-pooh/ML-Found) の `Trainer` にそのまま渡せる. 定義のファイルの置き場をプロジェクトの config に書き, 学習スクリプトで組み立てる. 定義のファイルは実験の出力先に写しておくと, 後から同じモデルを作って重みを読み込める.
 
-- ML-CreateArchitecture で保存した定義は, その置き場 (`~/.ml-createarchitecture/models/<名前>.yaml`) から, または画面の「YAML」のダウンロードで, プロジェクトの中 (下の例では `models/`) に写して使う. 定義を直した場合は写し直す
-- 学習に使う Python (ML-Dashboard から起動する場合はプロジェクトの仮想環境) には, ML-Found と一緒にこのライブラリも入れる
-- 学習スクリプトは, 実行した時点のプロジェクトの定義のファイルから組み立てる. ML-Dashboard の「同じ設定でもう一度」で起動し直す場合も同じなので, 前の実験と同じモデルにしたい場合は, その実験の `model_spec.yaml` をプロジェクトの定義のファイルに写してから起動する
+ML-Found のプロジェクト (`configs/default/train.yaml`, `configs/experiment/train.yaml`, 学習スクリプトを持つディレクトリ) の作り方は, ML-Found の README の「使い方」にある. ここでは, その学習スクリプトでモデルの定義を使う部分を示す.
 
-```yaml
-# configs/default/train.yaml (プロジェクト固有の項目)
-model:
-  spec: models/iris_mlp.yaml    # プロジェクトのディレクトリからの相対パス
-```
+1. プロジェクトの仮想環境に, ML-Found とこのライブラリを入れる
+
+    ```bash
+    pip install "ml-found @ git+https://github.com/victor-von-pooh/ML-Found.git"
+    pip install "ml-modelcontrol @ git+https://github.com/victor-von-pooh/ML-ModelControl.git"
+    ```
+
+2. モデルの定義をプロジェクトの中 (下の例では `models/`) に置く. 例から始める場合は次のように保存する
+
+    ```python
+    from ml_modelcontrol import dump_spec, load_example
+
+    dump_spec(load_example("mlp"), "models/mlp.yaml")  # 16 次元の入力から 3 クラス
+    ```
+
+3. 定義の置き場を, プロジェクトの default の config にプロジェクト固有の項目として書く (ML-Found の config には, プロジェクト固有の項目を自由に足せる)
+
+    ```yaml
+    # configs/default/train.yaml
+    experiment:
+      name: mlp
+      seed: 0
+    model:
+      spec: models/mlp.yaml    # プロジェクトのディレクトリからの相対パス
+    ```
+
+4. 学習スクリプトで定義から組み立てて学習し, 定義を実験の出力先に写す
+
+    ```python
+    # train.py (プロジェクトのディレクトリに置く)
+    import shutil
+    from pathlib import Path
+
+    import torch
+    from torch import nn
+    from torch.utils.data import DataLoader, TensorDataset
+
+    from ml_found import Trainer, load_project_config, start_experiment
+    from ml_modelcontrol import build_model
+
+    PROJECT_DIR = Path(__file__).resolve().parent
+
+
+    def step(model: nn.Module, batch: tuple, phase: str) -> dict:
+        # 1 バッチの損失と指標 (ML-Found が平均して記録する)
+        x, y = batch
+        logits = model(x)
+        loss = nn.CrossEntropyLoss()(logits, y)
+        acc = (logits.argmax(dim=1) == y).float().mean()
+        return {"loss": loss, "acc": acc}
+
+
+    # config (default に experiment と「項目=値」を重ねたもの) と差分
+    cfg, diff = load_project_config(str(PROJECT_DIR))
+
+    # 定義から組み立て (誤りがあれば, 実験の出力先を作る前に SpecError で止まる)
+    spec_path = PROJECT_DIR / cfg.model.spec
+    model = build_model(spec_path, seed=cfg.experiment.seed)
+
+    # 実験を始め, 定義を実験の出力先に残す
+    experiment = start_experiment(cfg, diff, str(PROJECT_DIR))
+    shutil.copy(spec_path, experiment.run_dir / "model_spec.yaml")
+
+    # データ (ここでは乱数. 実際はプロジェクトのデータ)
+    x = torch.randn(256, 16)
+    y = torch.randint(0, 3, (256,))
+    train_loader = DataLoader(TensorDataset(x[:192], y[:192]), batch_size=32)
+    valid_loader = DataLoader(TensorDataset(x[192:], y[192:]), batch_size=32)
+
+    trainer = Trainer(model, experiment, step)
+    history = trainer.fit(train_loader, valid_loader)
+    ```
+
+`experiment.run_dir` は実験の出力先 (`Path`. プロジェクトのディレクトリの `outputs/<experiment.name>/<日付>/<時刻>/`). ML-Found は学習した重みを `state_dict` として `final_model.pt` に保存するので, 後から読み込む場合は, 写した定義で組み立ててから重みを読み込む.
 
 ```python
-import shutil
-from pathlib import Path
-
-from ml_found import Trainer, load_project_config, start_experiment
+# 後から読み込む (パスはプロジェクトのディレクトリから. 日時は実験ごとに違う)
+import torch
 from ml_modelcontrol import build_model
 
-PROJECT_DIR = Path(__file__).resolve().parent
-
-cfg, diff = load_project_config(str(PROJECT_DIR))
-
-# 定義から組み立て (誤りがあれば, 実験の出力先を作る前に SpecError で止まる)
-spec_path = PROJECT_DIR / cfg.model.spec
-model = build_model(spec_path, seed=cfg.experiment.seed)
-
-# 実験を始め, 定義を実験の出力先に残す
-experiment = start_experiment(cfg, diff, str(PROJECT_DIR))
-shutil.copy(spec_path, experiment.run_dir / "model_spec.yaml")
-
-# step とデータ (train_loader, valid_loader) は, ML-Found の README の
-# 「学習スクリプト」と同じくプロジェクトで用意する
-trainer = Trainer(model, experiment, step)
-history = trainer.fit(train_loader, valid_loader)
-```
-
-`experiment.run_dir` は実験の出力先 (`Path`. プロジェクトのディレクトリの `outputs/<experiment.name>/<日付>/<時刻>/`). 後から読み込む場合は, その中の定義と重みを使う.
-
-```python
-# 後から読み込む (パスはプロジェクトのディレクトリから)
-import torch
-
-run_dir = "outputs/iris/2026-11-15/01-14-54"
+run_dir = "outputs/mlp/2026-11-15/01-14-54"
 model = build_model(f"{run_dir}/model_spec.yaml")
 model.load_state_dict(torch.load(f"{run_dir}/final_model.pt"))
 ```
 
 - 出力が 1 つの定義のモデルはテンソルを返し, 複数の場合は出力の名前の辞書を返す. `step` では `logits = model(x)` か, 複数なら `logits = model(x)["logits"]` のように受け取る
 - 入力は定義の `inputs` の順の位置か, 名前のキーワードで渡す
-- ML-CreateArchitecture で保存した定義 (YAML) もそのまま使える
 - 学習済みの重みを読む部品 (`pretrained: true` など) は, `build_model` のときに重みを取得する (後から読み込むときも, 取得してから `final_model.pt` の重みで上書きする. ネットワークと時間が要る)
+- 学習スクリプトは, 実行した時点のプロジェクトの定義のファイルから組み立てる. 前の実験と同じモデルで学習し直したい場合は, その実験の `model_spec.yaml` をプロジェクトの定義のファイルに写してから起動する
+
+GUI のアプリと合わせて使う場合 (どちらも任意).
+
+- ML-CreateArchitecture (このライブラリの部品を画面で組み立てるアプリ) で保存した定義は, その置き場 (`~/.ml-createarchitecture/models/<名前>.yaml`) から, または画面の「YAML」のダウンロードで, プロジェクトの中に写して使う. 定義を直した場合は写し直す
+- [ML-Dashboard](https://github.com/victor-von-pooh/ML-Dashboard) (ML-Found の実験を見て, 学習を起動するアプリ) から起動する場合は, プロジェクトの仮想環境にこのライブラリも入れておく. 「同じ設定でもう一度」で起動し直す場合も, 上と同じく実行した時点のプロジェクトの定義のファイルから組み立てる
 
 ## 開発
 
