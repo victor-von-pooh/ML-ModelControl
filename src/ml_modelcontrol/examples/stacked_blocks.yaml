@@ -1,0 +1,62 @@
+format_version: 1
+name: stacked_blocks
+description: 部分モデル (残差のブロック) を 3 回重ねた全結合のモデル (subgraphs と sub.<名前> の例)
+inputs:
+  x: {shape: [8, 32], ui: {x: 0, y: 160}}
+nodes:
+  stem:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 64}
+    inputs: x
+    ui: {x: 220, y: 160}
+  block1:
+    unit: sub.res_block
+    inputs: stem
+    ui: {x: 470, y: 160}
+  block2:
+    unit: sub.res_block
+    inputs: block1
+    ui: {x: 720, y: 160}
+  block3:
+    unit: sub.res_block
+    inputs: block2
+    ui: {x: 970, y: 160}
+  head:
+    unit: nn.Linear
+    params: {in_features: 64, out_features: 10}
+    inputs: block3
+    ui: {x: 1220, y: 160}
+outputs:
+  logits: head
+subgraphs:
+  res_block:
+    description: 正規化, 全結合, GELU の後に入力を足す残差のブロック (64 次元)
+    inputs:
+      x: {shape: [8, 64], ui: {x: 0, y: 160}}
+    nodes:
+      norm:
+        unit: nn.LayerNorm
+        params: {normalized_shape: 64}
+        inputs: x
+        ui: {x: 220, y: 60}
+      fc:
+        unit: nn.Linear
+        params: {in_features: 64, out_features: 64}
+        inputs: norm
+        ui: {x: 470, y: 60}
+      act:
+        unit: nn.GELU
+        inputs: fc
+        ui: {x: 720, y: 60}
+      add:
+        unit: op.Add
+        inputs: {xs: [x, act]}
+        ui: {x: 970, y: 160}
+    outputs:
+      y: add
+    ui:
+      outputs:
+        y: {x: 1220, y: 180}
+ui:
+  outputs:
+    logits: {x: 1470, y: 180}

@@ -72,7 +72,7 @@ text = dump_spec(spec)                   # 決まったキーの順の YAML の�
 
 学習済みの重みを読む引数 (Hugging Face の `pretrained`, `tv.Model` の `weights`, `timm.Model` の `pretrained`, `smp` の `encoder_weights` など) は, 形の推定 (`infer`) では重みを読まない値に置き換える (組み立てでは書いた値のまま). Hugging Face のモデルは `params` の `model_name` に名前かローカルのパスを書く. 外部のコード (`trust_remote_code`) は使わない.
 
-同梱した例のモデルの定義 (全結合, 残差, CNN, LSTM, Transformer のエンコーダー, GCN, BERT の分類) は `list_examples()` で一覧にし, `load_example("cnn_classifier")` で読み込める. 自分のモデルを書き始めるときの元にできる.
+同梱した例のモデルの定義 (全結合, 残差, 部分モデルの残差のブロックを重ねたもの, CNN, LSTM, Transformer のエンコーダー, GCN, BERT の分類) は `list_examples()` で一覧にし, `load_example("cnn_classifier")` で読み込める. 自分のモデルを書き始めるときの元にできる.
 
 `export_python("model.yaml")` で, 同じ計算をする `nn.Module` のクラスの Python のコードを書き出せる (`state_dict` のキーは `build_model` と同じ). 書き出したコードはこのライブラリが無くても動く (演算 (`op.Add` など) と Hugging Face の部品のクラスの定義をコードに書き写す. 外部のライブラリ (PyTorch Geometric, timm など) の部品を使う場合は, そのライブラリは要る). `export_python(..., standalone=False)` にすると, 書き写さずに `from ml_modelcontrol import ops` などで読み込む.
 

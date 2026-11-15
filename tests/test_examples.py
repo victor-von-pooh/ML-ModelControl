@@ -82,7 +82,10 @@ def test_standalone_export(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     from ml_modelcontrol import build_model, export_python
 
-    for name in ["residual_mlp", "lstm_classifier", "transformer_encoder"]:
+    for name in [
+        "residual_mlp", "lstm_classifier", "transformer_encoder",
+        "stacked_blocks"
+    ]:
         spec = load_example(name)
         code = export_python(spec)
         assert "from ml_modelcontrol" not in code
