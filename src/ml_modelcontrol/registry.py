@@ -1,5 +1,6 @@
 import inspect
 import math
+import re
 from dataclasses import asdict, dataclass, field
 from types import UnionType
 from typing import (
@@ -177,25 +178,224 @@ PARAM_DESCRIPTIONS = {
     "lower": "傾きの下限", "upper": "傾きの上限",
     "beta_softplus": "係数 beta",
     "align_corners": "角の画素をそろえて補間するか",
-    "recompute_scale_factor": "倍率から大きさを計算し直すか"
+    "recompute_scale_factor": "倍率から大きさを計算し直すか",
+    "act_layer": "活性化関数の層 (名前で選ぶ. ReLU, GELU など)",
+    "act_kwargs": "活性化関数の層に渡す引数",
+    "apply_act": "活性化関数を通すか",
+    "norm_layer": "正規化の層 (名前で選ぶ. BatchNorm2d, LayerNorm など)",
+    "gate_layer": "ゲートの活性化関数 (名前で選ぶ. sigmoid など)",
+    "spatial_dims": "空間の次元の数 (2 は画像, 3 は立体)",
+    "pretrained": "学習済みの重みを読むか (形の推定では読まない)",
+    "progress": "重みの取得の進み具合を表示するか",
+    "hidden_features": "中間の特徴量の数",
+    "drop": "ドロップアウトの割合",
+    "attn_drop": "注意の重みのドロップアウトの割合",
+    "proj_drop": "出力の射影のドロップアウトの割合",
+    "rd_ratio": "チャンネルを減らす割合 (Squeeze-and-Excitation など)",
+    "rd_channels": "減らした後のチャンネル数 (None なら rd_ratio から)",
+    "rd_divisor": "減らした後のチャンネル数を割り切れる数にする約数",
+    "dim_out": "出力の次元の大きさ",
+    "growth_rate": "層ごとに増やすチャンネル数 (DenseNet)",
+    "dropout_prob": "ドロップアウトの割合"
 }
 
-def describe_params(spec: UnitSpec) -> None:
+def describe_params(spec: UnitSpec, cls: Optional[type] = None) -> None:
     """
-    説明の無い引数に, 名前ごとの説明を付ける関数
+    説明の無い引数に, 名前ごとの説明か, クラスの docstring の説明を付ける
+    関数
+
+    手で書いた説明, 名前ごとの説明 (日本語), docstring の説明 (ライブラリの
+    言葉のまま) の順に使う
 
     Parameters
     ----------
     spec: UnitSpec
         部品, その場で書き換える
+    cls: Optional[type] = None
+        部品のクラス (docstring を読む), None の場合は名前ごとの説明だけ
 
     Returns
     ----------
     None
     """
+    documented = docstring_params(cls) if cls is not None else {}
     for param in spec.params:
         if not param.description:
-            param.description = PARAM_DESCRIPTIONS.get(param.name, "")
+            param.description = PARAM_DESCRIPTIONS.get(
+                param.name, documented.get(param.name, "")
+            )
+
+
+# docstring の引数の節の見出し (Google 形式) と, NumPy 形式の見出しの下線
+DOC_SECTION = re.compile(
+    r"^(\s*)(Args|Arguments|Parameters|Params|Keyword Args|Attributes)"
+    r"\s*:\s*$"
+)
+DOC_UNDERLINE = re.compile(r"^\s*-{3,}\s*$")
+
+# Google 形式の 1 つの引数の行 (name (型): 説明) と, NumPy 形式の行
+# (name : 型), Sphinx 形式の行 (:param 型 name: 説明)
+DOC_GOOGLE = re.compile(
+    r"^(\s*)\**([A-Za-z_][A-Za-z0-9_]*)\s*(\([^)]*\))?\s*:\s*(.*)$"
+)
+DOC_NUMPY = re.compile(r"^(\s*)([A-Za-z_][A-Za-z0-9_, ]*?)\s*:\s*(.*)$")
+DOC_SPHINX = re.compile(
+    r"^\s*:param\s+(?:[^:]*\s)?([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$"
+)
+
+# docstring から取り出す説明の文字数の上限
+DOC_MAX_LENGTH = 300
+
+
+def docstring_params(cls: type) -> dict[str, str]:
+    """
+    クラスの docstring (クラスと __init__) から, 引数ごとの説明を取り出す
+    関数
+
+    Google 形式 (Args:), NumPy 形式 (Parameters と下線), Sphinx 形式
+    (:param name:) を読む. 読めない書き方の引数は含めない
+
+    Parameters
+    ----------
+    cls: type
+        nn.Module のクラス
+
+    Returns
+    ----------
+    descriptions: dict[str, str]
+        引数の名前ごとの説明 (空白をまとめ, 長いものは切り詰めたもの)
+    """
+    # クラスと __init__ の docstring を順に読み, 先に見つけた説明を使用
+    descriptions: dict[str, str] = {}
+    for doc in (cls.__doc__, getattr(cls.__init__, "__doc__", None)):
+        if not isinstance(doc, str) or cls.__init__ is nn.Module.__init__ and (
+            doc is nn.Module.__init__.__doc__
+        ):
+            continue
+        for name, text in parse_doc_params(inspect.cleandoc(doc)).items():
+            descriptions.setdefault(name, text)
+
+    return descriptions
+
+
+def underlined(lines: list[str], index: int) -> bool:
+    """
+    行の次の行が NumPy 形式の見出しの下線かを返す関数
+
+    Parameters
+    ----------
+    lines: list[str]
+        docstring の行
+    index: int
+        行の番号
+
+    Returns
+    ----------
+    found: bool
+        次の行が下線 (--- の並び) なら True
+    """
+    found = index + 1 < len(lines) and bool(
+        DOC_UNDERLINE.match(lines[index + 1])
+    )
+
+    return found
+
+
+def parse_doc_params(doc: str) -> dict[str, str]:
+    """
+    1 つの docstring から, 引数ごとの説明を取り出す関数
+
+    Parameters
+    ----------
+    doc: str
+        字下げを整えた docstring
+
+    Returns
+    ----------
+    descriptions: dict[str, str]
+        引数の名前ごとの説明
+    """
+    lines = doc.splitlines()
+    found: dict[str, list[str]] = {}
+
+    # Sphinx 形式は行ごと (続く字下げした行は説明の続き)
+    current: Optional[list[str]] = None
+    for line in lines:
+        match = DOC_SPHINX.match(line)
+        if match:
+            current = found.setdefault(match.group(1), [])
+            current.append(match.group(2))
+        elif current is not None and line.startswith((" ", "\t")) and (
+            line.strip()
+        ):
+            current.append(line.strip())
+        else:
+            current = None
+
+    # Google 形式と NumPy 形式は, 引数の節の中だけ
+    index = 0
+    while index < len(lines):
+        google = DOC_SECTION.match(lines[index])
+        numpy_style = lines[index].strip() in (
+            "Parameters", "Args", "Arguments"
+        ) and underlined(lines, index)
+        if not google and not numpy_style:
+            index += 1
+            continue
+        base = len(lines[index]) - len(lines[index].lstrip())
+        index += 2 if numpy_style else 1
+        entry_indent: Optional[int] = None
+        current = None
+        while index < len(lines):
+            line = lines[index]
+            if not line.strip():
+                index += 1
+                continue
+            indent = len(line) - len(line.lstrip())
+            # 節の終わり (見出しと同じ字下げの, 引数でない行や次の見出し)
+            if indent < base or DOC_SECTION.match(line) or underlined(
+                lines, index
+            ):
+                break
+            if google and indent <= base:
+                break
+            if entry_indent is None or indent <= entry_indent:
+                match = (
+                    DOC_GOOGLE.match(line) if google else DOC_NUMPY.match(line)
+                )
+                if match is None:
+                    if indent <= base:
+                        break
+                    if current is not None:
+                        current.append(line.strip())
+                    index += 1
+                    continue
+                entry_indent = indent
+                names = [
+                    name.strip() for name in match.group(2).split(",")
+                ]
+                current = []
+                for name in names:
+                    if name.isidentifier():
+                        found.setdefault(name, current)
+                # Google 形式は同じ行に説明, NumPy 形式の同じ行は型
+                if google and match.group(4):
+                    current.append(match.group(4).strip())
+            elif current is not None:
+                current.append(line.strip())
+            index += 1
+
+    # 空白をまとめ, 長い説明は切り詰め
+    descriptions = {}
+    for name, parts in found.items():
+        text = " ".join(" ".join(parts).split())
+        if not text:
+            continue
+        if len(text) > DOC_MAX_LENGTH:
+            text = text[:DOC_MAX_LENGTH - 1].rstrip() + "…"
+        descriptions[name] = text
+
+    return descriptions
 
 
 def register(spec: UnitSpec) -> UnitSpec:

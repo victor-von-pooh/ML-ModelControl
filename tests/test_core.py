@@ -1076,3 +1076,54 @@ outputs:
     spec["nodes"]["c"]["params"]["kernel_size"] = [3, 3]
     spec["nodes"]["b"]["params"]["momentum"] = 0.1
     assert validate(spec) == []
+
+
+def test_docstring_params():
+    """
+    docstring の Google 形式, NumPy 形式, Sphinx 形式から引数の説明を取り出す
+    ことと, 名前ごとの説明 (日本語) を優先することを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    from ml_modelcontrol.registry import (
+        UnitSpec, ParamSpec, describe_params, parse_doc_params
+    )
+
+    google = parse_doc_params(
+        "Block.\n\nArgs:\n    width (int): Width of the\n        block.\n"
+        "    gain: Output gain.\n\nReturns:\n    out: not a param.\n"
+    )
+    assert google == {"width": "Width of the block.", "gain": "Output gain."}
+    numpy_style = parse_doc_params(
+        "Block.\n\nParameters\n----------\nwidth : int\n    Width.\n"
+        "a, b : float\n    Pair.\n\nReturns\n-------\nout : Tensor\n    No.\n"
+    )
+    assert numpy_style == {"width": "Width.", "a": "Pair.", "b": "Pair."}
+    sphinx = parse_doc_params(":param int width: Width\n    of block.\n")
+    assert sphinx == {"width": "Width of block."}
+
+    # 名前ごとの説明があればそれ, 無ければ docstring
+    class Documented(nn.Module):
+        """
+        Args:
+            in_channels (int): channels in.
+            depth (int): number of layers.
+        """
+
+    spec = UnitSpec(
+        name="test.Documented", category="test", source="test",
+        params=[
+            ParamSpec("in_channels", "int", None),
+            ParamSpec("depth", "int", None)
+        ]
+    )
+    describe_params(spec, Documented)
+    assert [param.description for param in spec.params] == [
+        "入力のチャンネル数", "number of layers."
+    ]
