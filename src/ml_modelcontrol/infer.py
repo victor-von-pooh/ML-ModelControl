@@ -327,6 +327,18 @@ def infer(
     if not analysis.ok or bad or skipped:
         result["ok"] = False
 
+    # 読み込むまで確かめられない注意 (Hugging Face のモデルの名前) は,
+    # 読み込んで計算できたノードでは除く
+    computed = {
+        name for name, entry in result["nodes"].items()
+        if entry["status"] == "ok"
+    }
+    result["issues"] = [
+        issue for issue in result["issues"]
+        if not (issue["code"] == "unchecked_model"
+                and issue["node"] in computed)
+    ]
+
     return result
 
 
