@@ -2,7 +2,7 @@ format_version: 1
 name: tiny_bert
 description: 学習済みの重みを使わずに部品から組んだ小さな BERT (語と位置の埋め込み, 自己注意と全結合の 2 ブロック, 先頭のトークンで分類). 番号 0 を詰め物として注意で見ない
 inputs:
-  ids: {shape: [2, 16], dtype: int64, fill: arange, ui: {x: 0, y: 160}}
+  ids: {shape: [2, 16], dtype: int64, fill: ones, ui: {x: 0, y: 160}}
 nodes:
   tok:
     unit: nn.Embedding

@@ -84,7 +84,7 @@ def test_standalone_export(monkeypatch: pytest.MonkeyPatch) -> None:
 
     for name in [
         "residual_mlp", "lstm_classifier", "transformer_encoder",
-        "stacked_blocks"
+        "stacked_blocks", "tiny_bert"
     ]:
         spec = load_example(name)
         code = export_python(spec)

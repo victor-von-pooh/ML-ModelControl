@@ -336,19 +336,29 @@ class Positions(nn.Module):
         ----------
         positions: torch.Tensor
             (バッチ, 長さ) の int64
+
+        Raises
+        ----------
+        ValueError
+            入力が 1 次元以下の場合
         """
-        # 長さの並びをバッチの数だけ並べる
+        # 位置の番号をバッチの数だけ並べたテンソル (後の層が書き換えても
+        # よいように連続したメモリ)
+        if input.dim() < 2:
+            raise ValueError(
+                "2 次元以上 (バッチ, 長さ, ...) の入力を入れてください"
+            )
         length = input.shape[1]
         line = torch.arange(
             self.start, self.start + length, device=input.device
         )
-        positions = line.unsqueeze(0).expand(input.shape[0], length)
+        positions = line.unsqueeze(0).repeat(input.shape[0], 1)
 
         return positions
 
 
 class Equal(nn.Module):
-    def __init__(self, value: float = 0):
+    def __init__(self, value: float = 0.0):
         # 親クラスのコンストラクタを呼び出す
         super(Equal, self).__init__()
 
