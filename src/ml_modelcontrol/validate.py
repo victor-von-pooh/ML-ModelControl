@@ -1,3 +1,4 @@
+import contextvars
 import difflib
 import keyword
 import math
@@ -8,9 +9,12 @@ from typing import Any, Optional, Union
 
 from torch import nn
 
-from ml_modelcontrol.registry import REGISTRY, ParamSpec, UnitSpec, get_unit
+from ml_modelcontrol.registry import (
+    REGISTRY, ParamSpec, PortSpec, UnitSpec, get_unit
+)
 from ml_modelcontrol.spec import (
-    GRAPH_KEYS, INPUT_KEYS, NODE_KEYS, load_spec, node_inputs, parse_ref
+    GRAPH_KEYS, INPUT_KEYS, NODE_KEYS, SUBGRAPH_PREFIX, load_spec,
+    node_inputs, parse_ref
 )
 
 # 入力, ノード, 出力の名前の形
@@ -49,6 +53,12 @@ class Analysis:
         field(default_factory=dict)
     )
     units: dict[str, UnitSpec] = field(default_factory=dict)
+
+    # 部分モデルの名前ごとの, 定義と解析 (中の部分モデルも含め, 定義全体で
+    # 共有)
+    subgraphs: dict[str, tuple[dict, "Analysis"]] = field(
+        default_factory=dict
+    )
 
     @property
     def ok(self) -> bool:
@@ -96,6 +106,12 @@ def validate(spec: Union[str, Path, dict]) -> list[dict]:
     return issues
 
 
+# 確かめている定義の部分モデルの部品を引くもの (analyze の中だけで設定)
+LOCAL_UNITS: contextvars.ContextVar[Optional["Subgraphs"]] = (
+    contextvars.ContextVar("LOCAL_UNITS", default=None)
+)
+
+
 def analyze(spec: dict) -> Analysis:
     """
     モデルの定義を確かめ, 組み立てに使う計算の順とつなぎ先を求める関数
@@ -110,16 +126,53 @@ def analyze(spec: dict) -> Analysis:
     analysis: Analysis
         誤りと注意, 計算の順, つなぎ先
     """
+    # 部分モデルを先に全て確かめ (使われないものも), 本体を確認
+    issues: list[Issue] = []
+    subgraphs = Subgraphs(spec.get("subgraphs"), issues)
+    token = LOCAL_UNITS.set(subgraphs)
+    try:
+        subgraphs.check_all()
+        analysis = analyze_graph(spec, issues, top=True)
+        check_unused_subgraphs(spec, analysis, subgraphs)
+    finally:
+        LOCAL_UNITS.reset(token)
+    analysis.subgraphs = subgraphs.done
+
+    return analysis
+
+
+def analyze_graph(spec: dict, issues: list[Issue], top: bool) -> Analysis:
+    """
+    1 つの定義 (本体か部分モデル) を確かめる関数
+
+    Parameters
+    ----------
+    spec: dict
+        モデルの定義
+    issues: list[Issue]
+        誤りと注意を加えるリスト (本体の解析の issues になる)
+    top: bool
+        本体か (部分モデルは format_version と subgraphs を書けず, 入力の
+        shape が無くても注意しない)
+
+    Returns
+    ----------
+    analysis: Analysis
+        誤りと注意, 計算の順, つなぎ先
+    """
     # 一番上の項目, 入力, ノード, 出力の順に確認
-    analysis = Analysis()
-    issues = analysis.issues
+    analysis = Analysis(issues=issues)
+    keys = GRAPH_KEYS if top else GRAPH_KEYS - {
+        "format_version", "subgraphs"
+    }
     for key in spec:
-        if key not in GRAPH_KEYS:
+        if key not in keys:
             issues.append(Issue(
-                "error", "unknown_key", f"知らない項目 {key} があります",
+                "error", "unknown_key", f"知らない項目 {key} があります"
+                + ("" if top else " (部分モデルの中には書けません)"),
                 location=key
             ))
-    input_names = check_inputs(spec.get("inputs"), issues)
+    input_names = check_inputs(spec.get("inputs"), issues, need_shape=top)
     nodes = spec.get("nodes")
     if isinstance(nodes, dict) and not nodes or nodes is None:
         issues.append(Issue(
@@ -200,7 +253,9 @@ def check_name(
     return valid
 
 
-def check_inputs(inputs: Any, issues: list[Issue]) -> list[str]:
+def check_inputs(
+    inputs: Any, issues: list[Issue], need_shape: bool = True
+) -> list[str]:
     """
     モデルの入力の定義を確かめる関数
 
@@ -210,6 +265,9 @@ def check_inputs(inputs: Any, issues: list[Issue]) -> list[str]:
         定義の inputs
     issues: list[Issue]
         誤りと注意を加えるリスト
+    need_shape: bool = True
+        shape が無い場合に注意するか (部分モデルでは形は前のノードから
+        決まるので注意しない)
 
     Returns
     ----------
@@ -247,16 +305,16 @@ def check_inputs(inputs: Any, issues: list[Issue]) -> list[str]:
                     location=f"inputs.{name}.{key}"
                 ))
         shape = value.get("shape")
-        if shape is None:
+        if shape is None and need_shape:
             issues.append(Issue(
                 "warning", "no_shape",
                 f"入力 {name} に shape が無いので, 形を推定できません",
                 location=f"inputs.{name}.shape"
             ))
-        elif not isinstance(shape, list) or not all(
+        elif shape is not None and (not isinstance(shape, list) or not all(
             isinstance(size, int) and not isinstance(size, bool) and size >= 0
             for size in shape
-        ):
+        )):
             issues.append(Issue(
                 "error", "invalid_shape",
                 f"入力 {name} の shape は 0 以上の整数のリストにしてください: "
@@ -532,12 +590,12 @@ def check_node(
         ))
         return
     try:
-        unit = get_unit(str(node.get("unit")))
+        unit = lookup_unit(str(node.get("unit")))
     except KeyError:
         issues.append(Issue(
             "error", "unknown_unit",
             f"部品 {node.get('unit')!r} は登録されていません"
-            f"{suggest(str(node.get('unit')), list(REGISTRY))}", node=name,
+            f"{suggest(str(node.get('unit')), unit_names())}", node=name,
             location="unit"
         ))
         return
@@ -732,7 +790,7 @@ def check_ref(
     # ノードの出力の口の確認 (出力が複数の部品は口の名前が必須)
     target_node = nodes[name]
     try:
-        unit = get_unit(str(target_node.get("unit"))) if isinstance(
+        unit = lookup_unit(str(target_node.get("unit"))) if isinstance(
             target_node, dict
         ) else None
     except KeyError:
@@ -978,8 +1036,12 @@ def check_unused(
         if name in used:
             continue
         used.add(name)
-        for targets in analysis.connections.get(name, {}).values():
-            stack.extend(target for target, _ in targets)
+        if name in analysis.connections:
+            for targets in analysis.connections[name].values():
+                stack.extend(target for target, _ in targets)
+        elif isinstance(nodes.get(name), dict):
+            # 部品を確かめられなかったノードは, 書いたつなぎ先の文字から
+            stack.extend(raw_refs(node_inputs(nodes[name])))
 
     # 届かないノードと入力を注意として追加
     for name in nodes:
@@ -994,3 +1056,351 @@ def check_unused(
                 "warning", "unused_input", f"入力 {name} は使われていません",
                 location=f"inputs.{name}"
             ))
+
+
+def raw_refs(inputs: Any) -> list[str]:
+    """
+    ノードの inputs に書いたつなぎ先の名前を, 口を確かめずに集める関数
+
+    Parameters
+    ----------
+    inputs: Any
+        定義の inputs (辞書か省略形の文字)
+
+    Returns
+    ----------
+    names: list[str]
+        入力かノードの名前
+    """
+    values = [inputs] if isinstance(inputs, str) else (
+        list(inputs.values()) if isinstance(inputs, dict) else []
+    )
+    refs = [
+        item for value in values
+        for item in (value if isinstance(value, list) else [value])
+        if isinstance(item, str)
+    ]
+    names = [parse_ref(ref)[0] for ref in refs]
+
+    return names
+
+
+def lookup_unit(name: str) -> UnitSpec:
+    """
+    名前から部品を取り出す関数 (確かめている定義の部分モデルも含む)
+
+    Parameters
+    ----------
+    name: str
+        部品の名前 (nn.Linear, sub.block など)
+
+    Returns
+    ----------
+    unit: UnitSpec
+        部品
+
+    Raises
+    ----------
+    KeyError
+        登録されていない名前と, 定義に無い部分モデルの場合
+    """
+    # sub. で始まる名前は定義の部分モデル, それ以外は登録簿
+    subgraphs = LOCAL_UNITS.get()
+    if name.startswith(SUBGRAPH_PREFIX):
+        if subgraphs is None:
+            raise KeyError(f"部分モデル {name} はありません")
+        unit = subgraphs.unit(name[len(SUBGRAPH_PREFIX):])
+        return unit
+    unit = get_unit(name)
+
+    return unit
+
+
+def unit_names() -> list[str]:
+    """
+    書き間違いの候補に使う, 部品の名前の一覧を返す関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    names: list[str]
+        登録簿の部品と, 確かめている定義の部分モデルの名前
+    """
+    subgraphs = LOCAL_UNITS.get()
+    names = list(REGISTRY)
+    if subgraphs is not None:
+        names += [SUBGRAPH_PREFIX + name for name in subgraphs.names]
+
+    return names
+
+
+def class_name_of(name: str) -> str:
+    """
+    部分モデルの名前から, 書き出すコードのクラスの名前を作る関数
+
+    Parameters
+    ----------
+    name: str
+        部分モデルの名前 (res_block など)
+
+    Returns
+    ----------
+    class_name: str
+        ResBlock のような名前
+    """
+    parts = [part for part in name.split("_") if part]
+    class_name = "".join(part[:1].upper() + part[1:] for part in parts)
+
+    return class_name or "Subgraph"
+
+
+# 定義の部分モデルを, 必要になったときに確かめて部品にするもの
+class Subgraphs:
+    def __init__(self, subgraphs: Any, issues: list[Issue]):
+        # 部分モデルの定義と, 本体の誤りと注意を加えるリストを保存
+        self.issues = issues
+        self.specs: dict[str, Any] = {}
+        if subgraphs is not None and not isinstance(subgraphs, dict):
+            issues.append(Issue(
+                "error", "invalid_subgraphs",
+                "subgraphs は部分モデルの名前と定義の辞書にしてください",
+                location="subgraphs"
+            ))
+        elif isinstance(subgraphs, dict):
+            self.specs = {str(key): value for key, value in subgraphs.items()}
+        self.names = list(self.specs)
+
+        # 作った部品, 確かめた定義と解析, 確かめている途中の名前 (循環の検出)
+        self.units: dict[str, UnitSpec] = {}
+        self.done: dict[str, tuple[dict, Analysis]] = {}
+        self.stack: list[str] = []
+
+    def check_all(self) -> None:
+        """
+        全ての部分モデルを確かめる関数 (使われないものの誤りも返すため)
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        ----------
+        None
+        """
+        for name in self.names:
+            try:
+                self.unit(name)
+            except KeyError:
+                pass
+
+    def unit(self, name: str) -> UnitSpec:
+        """
+        部分モデルを確かめ, 部品にして返す関数
+
+        Parameters
+        ----------
+        name: str
+            部分モデルの名前 (sub. を除いたもの)
+
+        Returns
+        ----------
+        unit: UnitSpec
+            部品 (誤りのある部分モデルは使えない部品)
+
+        Raises
+        ----------
+        KeyError
+            定義に無い部分モデルの場合
+        """
+        # 確かめ済みのものと, 確かめている途中のもの (循環) の扱い
+        if name in self.units:
+            return self.units[name]
+        if name not in self.specs:
+            raise KeyError(f"部分モデル {name} はありません")
+        unit_name = SUBGRAPH_PREFIX + name
+        if name in self.stack:
+            cycle = " → ".join([*self.stack[self.stack.index(name):], name])
+            unit = UnitSpec(
+                name=unit_name, category="subgraph", source="subgraph",
+                available=False,
+                reason=f"部分モデルが互いに使い合っています ({cycle})"
+            )
+            return unit
+
+        # 部分モデルの定義を確かめ, 誤りと注意を場所を付けて本体に追加
+        spec = self.specs[name]
+        location = f"subgraphs.{name}"
+        inner: list[Issue] = []
+        self.stack.append(name)
+        try:
+            check_name(name, "部分モデル", inner, node=False)
+            if not isinstance(spec, dict):
+                inner.append(Issue(
+                    "error", "invalid_subgraph",
+                    "部分モデルは定義の辞書にしてください"
+                ))
+                analysis = Analysis(issues=inner)
+            else:
+                analysis = analyze_graph(spec, inner, top=False)
+        finally:
+            self.stack.pop()
+        for issue in inner:
+            where = ".".join(
+                part for part in (
+                    location,
+                    f"nodes.{issue.node}" if issue.node else None,
+                    issue.location
+                ) if part
+            )
+            self.issues.append(Issue(
+                issue.severity, issue.code,
+                f"部分モデル {name}: {issue.message}", location=where
+            ))
+
+        # 入力は全て必須の口, 出力は出力の口 (2 つ以上なら辞書のキー)
+        errors = [issue for issue in inner if issue.severity == "error"]
+        inputs = spec.get("inputs") if isinstance(spec, dict) else None
+        outputs = spec.get("outputs") if isinstance(spec, dict) else None
+        input_ports = [
+            PortSpec(name=str(key), description=str(
+                (value or {}).get("description", "")
+                if isinstance(value, dict) or value is None else ""
+            ))
+            for key, value in (
+                inputs.items() if isinstance(inputs, dict) else []
+            )
+        ]
+        output_names = [
+            str(key) for key in (outputs if isinstance(outputs, dict) else {})
+        ]
+        output_ports = [
+            PortSpec(
+                name=key, path=[] if len(output_names) == 1 else [key]
+            )
+            for key in output_names
+        ]
+        unit = UnitSpec(
+            name=unit_name, category="subgraph", source="subgraph",
+            description=str(
+                spec.get("description", "") if isinstance(spec, dict) else ""
+            ),
+            inputs=input_ports, outputs=output_ports,
+            available=not errors,
+            reason=(
+                f"部分モデル {name} に誤りがあります (subgraphs.{name} の誤りを"
+                "見てください)" if errors else ""
+            ),
+            code_name=class_name_of(name)
+        )
+        if not errors:
+            self.done[name] = (spec, analysis)
+            unit.builder = subgraph_builder(spec, analysis)
+        self.units[name] = unit
+
+        return unit
+
+
+def subgraph_builder(spec: dict, analysis: Analysis) -> Any:
+    """
+    部分モデルの GraphModel を作る関数を返す関数
+
+    Parameters
+    ----------
+    spec: dict
+        部分モデルの定義
+    analysis: Analysis
+        部分モデルの解析
+
+    Returns
+    ----------
+    builder: Callable[[], GraphModel]
+        引数なしで部分モデルを作る関数
+    """
+    def build() -> nn.Module:
+        # 循環 import を避けるため, ここで読み込み
+        from ml_modelcontrol.model import GraphModel
+
+        model = GraphModel(spec, analysis)
+        return model
+
+    return build
+
+
+def check_unused_subgraphs(
+    spec: dict, analysis: Analysis, subgraphs: Subgraphs
+) -> None:
+    """
+    本体からも他の部分モデルからも使われない部分モデルを注意にする関数
+
+    Parameters
+    ----------
+    spec: dict
+        モデルの定義
+    analysis: Analysis
+        注意を加える本体の解析
+    subgraphs: Subgraphs
+        定義の部分モデル
+
+    Returns
+    ----------
+    None
+    """
+    # 本体と部分モデルのノードの部品の名前を集める
+    graphs = [spec, *subgraphs.specs.values()]
+    used = {
+        str(node.get("unit"))
+        for graph in graphs if isinstance(graph, dict)
+        for node in (
+            graph.get("nodes") if isinstance(graph.get("nodes"), dict)
+            else {}
+        ).values()
+        if isinstance(node, dict)
+    }
+    for name in subgraphs.names:
+        if SUBGRAPH_PREFIX + name not in used:
+            analysis.issues.append(Issue(
+                "warning", "unused_subgraph",
+                f"部分モデル {name} はどのノードにも使われていません",
+                location=f"subgraphs.{name}"
+            ))
+
+
+def describe_spec_units(spec: Union[str, Path, dict]) -> list[dict]:
+    """
+    定義の部分モデルの部品の一覧を, describe_units と同じ形で返す関数
+
+    GUI の部品の一覧と, ノードの口の表示に使う
+
+    Parameters
+    ----------
+    spec: Union[str, Path, dict]
+        モデルの定義, またはその YAML か JSON のファイルのパス
+
+    Returns
+    ----------
+    units: list[dict]
+        部分モデルの名前の順の部品ごとの辞書 (誤りのあるものは使えない部品)
+    """
+    # 部分モデルを確かめて部品にし, 作る関数を除いて辞書に変換
+    loaded = load_spec(spec)
+    subgraphs = Subgraphs(loaded.get("subgraphs"), [])
+    token = LOCAL_UNITS.set(subgraphs)
+    try:
+        subgraphs.check_all()
+    finally:
+        LOCAL_UNITS.reset(token)
+    units = []
+    for name in subgraphs.names:
+        if name not in subgraphs.units:
+            continue
+        data = asdict(subgraphs.units[name])
+        for key in (
+            "builder", "code_name", "code_import", "code_args", "offline"
+        ):
+            data.pop(key)
+        units.append(data)
+
+    return units

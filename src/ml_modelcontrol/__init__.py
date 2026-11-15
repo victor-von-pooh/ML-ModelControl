@@ -5,10 +5,10 @@ from ml_modelcontrol.infer import infer
 from ml_modelcontrol.model import GraphModel, SpecError, build_model
 from ml_modelcontrol.registry import describe_units, get_unit
 from ml_modelcontrol.spec import (
-    dump_spec, list_examples, load_example, load_spec
+    dump_spec, embed_subgraph, list_examples, load_example, load_spec
 )
 from ml_modelcontrol.units import register_unit
-from ml_modelcontrol.validate import validate
+from ml_modelcontrol.validate import describe_spec_units, validate
 
 # バージョンは pyproject.toml の値を使用
 try:
@@ -17,8 +17,8 @@ except metadata.PackageNotFoundError:
     __version__ = "不明"
 
 __all__ = [
-    "GraphModel", "SpecError", "__version__", "build_model", "describe_units",
-    "dump_spec", "export_python", "get_unit", "infer", "list_examples",
-    "load_example", "load_spec",
-    "register_unit", "validate"
+    "GraphModel", "SpecError", "__version__", "build_model",
+    "describe_spec_units", "describe_units", "dump_spec", "embed_subgraph",
+    "export_python", "get_unit", "infer", "list_examples", "load_example",
+    "load_spec", "register_unit", "validate"
 ]

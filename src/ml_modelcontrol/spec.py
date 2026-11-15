@@ -1,5 +1,6 @@
 import copy
 import json
+import keyword
 import re
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -12,12 +13,16 @@ FORMAT_VERSION = 1
 # 定義の一番上, 入力, ノードで書ける項目
 GRAPH_KEYS = {
     "format_version", "name", "description", "inputs", "nodes", "outputs",
-    "ui"
+    "subgraphs", "ui"
 }
 INPUT_KEYS = {"shape", "dtype", "fill", "description", "ui"}
 NODE_KEYS = {
     "unit", "params", "forward_params", "inputs", "description", "ui"
 }
+
+
+# 定義の部分モデルを部品として使う名前の頭 (sub.block など)
+SUBGRAPH_PREFIX = "sub."
 
 
 # YAML 1.2 の書き方の数 (1e-5 など) も数として読む読み込み方
@@ -131,17 +136,55 @@ def dump_spec(spec: dict, path: Optional[Union[str, Path]] = None) -> str:
     text: str
         保存した文字
     """
+    # 一番上の項目とノードの項目の順をそろえ (部分モデルの中も),
+    # 拡張子に合わせて書き出し
+    ordered = order_graph(spec)
+    if isinstance(ordered.get("subgraphs"), dict):
+        ordered["subgraphs"] = {
+            name: order_graph(sub) if isinstance(sub, dict) else sub
+            for name, sub in ordered["subgraphs"].items()
+        }
+    is_json = path is not None and Path(path).suffix == ".json"
+    if is_json:
+        text = json.dumps(ordered, ensure_ascii=False, indent=2) + "\n"
+    else:
+        text = yaml.safe_dump(
+            ordered, allow_unicode=True, sort_keys=False,
+            default_flow_style=None
+        )
+    if path is not None:
+        Path(path).write_text(text, encoding="utf-8")
+
+    return text
+
+
+def order_graph(spec: dict) -> dict:
+    """
+    定義の一番上の項目とノードの項目を決まった順に並べる関数
+
+    知らない項目は後ろに置き, ノードは書いた順のまま残す
+
+    Parameters
+    ----------
+    spec: dict
+        モデルの定義 (本体か部分モデル)
+
+    Returns
+    ----------
+    ordered: dict
+        並べた定義
+    """
     # 一番上の項目の順の整列 (知らない項目は後ろ)
     order = [
         "format_version", "name", "description", "inputs", "nodes",
-        "outputs", "ui"
+        "outputs", "subgraphs", "ui"
     ]
     ordered = {key: spec[key] for key in order if key in spec}
     ordered.update({
         key: value for key, value in spec.items() if key not in ordered
     })
 
-    # ノードの項目の順もそろえ, 拡張子に合わせて書き出し
+    # ノードの項目の順の整列
     node_order = [
         "unit", "description", "params", "forward_params", "inputs", "ui"
     ]
@@ -158,18 +201,69 @@ def dump_spec(spec: dict, path: Optional[Union[str, Path]] = None) -> str:
             )
             for name, node in ordered["nodes"].items()
         }
-    is_json = path is not None and Path(path).suffix == ".json"
-    if is_json:
-        text = json.dumps(ordered, ensure_ascii=False, indent=2) + "\n"
-    else:
-        text = yaml.safe_dump(
-            ordered, allow_unicode=True, sort_keys=False,
-            default_flow_style=None
-        )
-    if path is not None:
-        Path(path).write_text(text, encoding="utf-8")
 
-    return text
+    return ordered
+
+
+def embed_subgraph(
+    spec: Union[str, Path, dict], name: str,
+    source: Union[str, Path, dict]
+) -> dict:
+    """
+    別のモデルの定義を, 部分モデルとして定義の中に写す関数
+
+    写す定義の部分モデルも一緒に写す. 写した後は, ノードの unit に
+    sub.<name> と書いて使う
+
+    Parameters
+    ----------
+    spec: Union[str, Path, dict]
+        写し先のモデルの定義, またはそのファイルのパス
+    name: str
+        部分モデルの名前
+    source: Union[str, Path, dict]
+        写すモデルの定義, またはそのファイルのパス
+
+    Returns
+    ----------
+    spec: dict
+        部分モデルを加えた定義 (渡した辞書は変えない)
+
+    Raises
+    ----------
+    ValueError
+        名前が規則に合わない場合と, 中身の違う同じ名前の部分モデルが既に
+        ある場合
+    """
+    # 名前の確認と, 写し先と写す定義の読み込み
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name) or (
+        keyword.iskeyword(name)
+    ):
+        raise ValueError(
+            f"部分モデルの名前 {name!r} は, 英字か _ で始まり英数字と _ だけ"
+            "からなる名前 (予約語を除く) にしてください"
+        )
+    target = load_spec(spec)
+    copied = load_spec(source)
+    subgraphs = target.get("subgraphs") or {}
+    if not isinstance(subgraphs, dict):
+        raise ValueError("subgraphs は部分モデルの名前と定義の辞書にしてください")
+    subgraphs = dict(subgraphs)
+
+    # 写す定義の部分モデル (同じ名前で中身が同じものは 1 つにまとめる) と,
+    # 版と部分モデルを除いた本体
+    nested = copied.pop("subgraphs", None) or {}
+    copied.pop("format_version", None)
+    for key, value in [*nested.items(), (name, copied)]:
+        if key in subgraphs and subgraphs[key] != value:
+            raise ValueError(
+                f"部分モデル {key} は既にあり, 中身が違います. 別の名前にして"
+                "ください"
+            )
+        subgraphs[key] = copy.deepcopy(value)
+    target["subgraphs"] = subgraphs
+
+    return target
 
 
 def parse_ref(ref: str) -> tuple[str, Optional[str]]:

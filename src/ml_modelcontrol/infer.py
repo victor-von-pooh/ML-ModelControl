@@ -174,13 +174,20 @@ def infer(
     # 定義の誤りがある場合と, 形の無い入力がある場合は計算なし
     # 学習済みの重みを読む部品は読まない値で作成 (形は同じで, 大きな重みの
     # 取得と読み込みを避けるため)
+    # (部分モデルの中のノードも)
     spec = load_spec(spec)
-    for node in (spec.get("nodes") or {}).values():
-        if not isinstance(node, dict):
-            continue
-        offline = offline_values(str(node.get("unit", "")))
-        if offline and isinstance(node.get("params", {}) or {}, dict):
-            node["params"] = {**(node.get("params") or {}), **offline}
+    subgraphs = spec.get("subgraphs")
+    graphs = [spec, *(
+        subgraphs.values() if isinstance(subgraphs, dict) else []
+    )]
+    for graph in graphs:
+        nodes = graph.get("nodes") if isinstance(graph, dict) else None
+        for node in (nodes if isinstance(nodes, dict) else {}).values():
+            if not isinstance(node, dict):
+                continue
+            offline = offline_values(str(node.get("unit", "")))
+            if offline and isinstance(node.get("params", {}) or {}, dict):
+                node["params"] = {**(node.get("params") or {}), **offline}
     analysis = analyze(spec)
     result: dict = {
         "ok": False, "issues": [vars(issue) for issue in analysis.issues],
@@ -194,12 +201,15 @@ def infer(
     # 組み立ての途中でも形を確かめられるように, 誤りのあるノードとその先
     # だけを除いて計算 (全体の ok は False のまま). 出力が無いことと出力の
     # つなぎ先の誤り以外の, ノードに付かない誤り (入力の形の書き方など) が
-    # ある場合は計算しない
+    # ある場合は計算しない. 部分モデルの中の誤りは, それを使うノードの誤り
+    # (使えない部品) になるので止めない
     blocking = [
         issue for issue in analysis.issues
         if issue.severity == "error" and issue.node is None
         and issue.code != "no_outputs"
-        and not str(issue.location or "").startswith("outputs")
+        and not str(issue.location or "").startswith(
+            ("outputs", "subgraphs")
+        )
     ]
     if blocking or no_shape:
         return result

@@ -549,7 +549,7 @@ def registered_names() -> list[str]:
 # 部品が増えた場合に重ならないため)
 BUILTIN_PREFIXES = {
     "nn", "op", "pyg", "hf", "tv", "timm", "audio", "einops", "kornia",
-    "monai", "smp"
+    "monai", "smp", "sub"
 }
 
 # 自作の部品の名前 (識別子を . でつないだもの)
