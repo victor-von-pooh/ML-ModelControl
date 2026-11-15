@@ -143,6 +143,34 @@ def offline_values(unit_name: str) -> dict:
     return values
 
 
+def describe_error(error: Exception) -> str:
+    """
+    ノードの計算の誤りの文を作る関数
+
+    部分モデルのノードの誤りには, 中のどのノードで起きたかを添える
+    (組み立てたモデルが誤りに付けた注記のうち, 最後の 1 つ (外のノード
+    自身のもの) を除いたもの. 注記は Python 3.11 以上)
+
+    Parameters
+    ----------
+    error: Exception
+        ノードの計算で起きた誤り
+
+    Returns
+    ----------
+    message: str
+        「型の名前: 誤りの文」と, 中のノードの場所
+    """
+    message = f"{type(error).__name__}: {error}"
+    notes = [
+        str(note) for note in getattr(error, "__notes__", [])[:-1]
+    ]
+    if notes:
+        message += f" ({' / '.join(notes)})"
+
+    return message
+
+
 def infer(
     spec: Union[str, Path, dict], max_params: int = MAX_PARAMS,
     max_input_elements: int = MAX_INPUT_ELEMENTS
@@ -445,7 +473,7 @@ def run_nodes(
                     )
             except Exception as error:
                 entry["status"] = "error"
-                entry["error"] = f"{type(error).__name__}: {error}"
+                entry["error"] = describe_error(error)
                 failed[name] = entry["error"]
     result["params"] = total
     result["trainable"] = trainable

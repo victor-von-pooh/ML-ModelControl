@@ -350,3 +350,26 @@ subgraphs:
     model = build_model(spec)
     assert model(torch.ones(2, 4), torch.zeros(2, 4)).sum().item() == 8
     assert infer(spec)["ok"]
+
+
+@pytest.mark.skipif(
+    not hasattr(Exception, "add_note"), reason="注記は Python 3.11 以上"
+)
+def test_error_inside_subgraph_names_inner_node():
+    """
+    部分モデルの中で計算の誤りが起きた場合に, 中のノードの名前を誤りの文に
+    添えることを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    spec = make_main()
+    spec["subgraphs"]["block"]["nodes"]["fc"]["params"]["in_features"] = 5
+    error = infer(spec)["nodes"]["b1"]["error"]
+    assert error.startswith("RuntimeError")
+    assert "ノード fc (nn.Linear)" in error
