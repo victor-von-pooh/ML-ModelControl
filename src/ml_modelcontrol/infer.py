@@ -356,7 +356,7 @@ def infer(
     for name, cause in skipped.items():
         result["nodes"][name] = {
             "status": "skipped", "outputs": {}, "params": 0, "trainable": 0,
-            "error": f"前のノード {cause} が計算できません"
+            "error": f"前のノード {cause} の誤りで計算できません"
         }
     for name, ref in spec["outputs"].items():
         target = str(ref).partition(":")[0]
@@ -516,7 +516,9 @@ def run_nodes(
             ]
             if upstream:
                 entry["status"] = "skipped"
-                entry["error"] = f"前のノード {upstream[0]} が計算できません"
+                entry["error"] = (
+                    f"前のノード {upstream[0]} の誤りで計算できません"
+                )
                 failed[name] = entry["error"]
                 continue
 

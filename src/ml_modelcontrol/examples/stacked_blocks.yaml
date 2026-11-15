@@ -1,6 +1,6 @@
 format_version: 1
 name: stacked_blocks
-description: 部分モデル (残差のブロック) を 3 回重ねた全結合のモデル (subgraphs と sub.<名前> の例)
+description: 部分モデル (残差のブロック) を 3 回重ねた全結合のモデル (部分モデルの使い方の例)
 inputs:
   x: {shape: [8, 32], ui: {x: 0, y: 160}}
 nodes:
