@@ -37,3 +37,21 @@ jobs:
       - run: pip install ${{ matrix.torch }} --index-url https://download.pytorch.org/whl/cpu
       - run: pip install -e ".[${{ matrix.extras }}]"
       - run: pytest -q
+      # 1 行 79 文字以内 (CODING_STYLE.md. 日本語も 1 文字と数える)
+      - name: 行の長さの確認
+        run: |
+          python - <<'EOF'
+          import pathlib
+          import sys
+
+          long = [
+              f"{path}:{number}"
+              for path in sorted(pathlib.Path(".").glob("[st]*/**/*.py"))
+              for number, line in enumerate(
+                  path.read_text(encoding="utf-8").splitlines(), 1
+              )
+              if len(line) > 79
+          ]
+          print("\n".join(long))
+          sys.exit(1 if long else 0)
+          EOF
