@@ -1,0 +1,65 @@
+format_version: 1
+name: vae
+description: >-
+  VAE (変分自己符号化器): 符号化器の出力を平均と対数分散に分け,
+  再パラメータ化で引いた潜在変数から入力を作り直す.
+  学習の step で再構成の誤差と KL (出力の mu と logvar から計算) を足す
+inputs:
+  x: {shape: [8, 16], ui: {x: 0, y: 160}}
+nodes:
+  # 符号化器 (16 → 32 → 平均と対数分散を並べた 2 × 8)
+  enc1:
+    unit: nn.Linear
+    params: {in_features: 16, out_features: 32}
+    inputs: x
+    ui: {x: 220, y: 160}
+  enc_act:
+    unit: nn.ReLU
+    inputs: enc1
+    ui: {x: 470, y: 160}
+  enc2:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 16}
+    inputs: enc_act
+    ui: {x: 720, y: 160}
+  # 前半の 8 次元を平均, 後半の 8 次元を対数分散として取り出し
+  mu:
+    unit: op.Chunk
+    params: {chunks: 2, index: 0, dim: 1}
+    inputs: enc2
+    ui: {x: 970, y: 60}
+  logvar:
+    unit: op.Chunk
+    params: {chunks: 2, index: 1, dim: 1}
+    inputs: enc2
+    ui: {x: 970, y: 260}
+  # 再パラメータ化 (学習の形では乱数を引き, 評価の形では平均のまま)
+  z:
+    unit: op.Reparameterize
+    inputs: {mu: mu, logvar: logvar}
+    ui: {x: 1220, y: 160}
+  # 復号器 (潜在変数の 8 → 32 → 16)
+  dec1:
+    unit: nn.Linear
+    params: {in_features: 8, out_features: 32}
+    inputs: z
+    ui: {x: 1470, y: 160}
+  dec_act:
+    unit: nn.ReLU
+    inputs: dec1
+    ui: {x: 1720, y: 160}
+  dec2:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 16}
+    inputs: dec_act
+    ui: {x: 1970, y: 160}
+# 再構成と, KL の計算に使う平均と対数分散
+outputs:
+  recon: dec2
+  mu: mu
+  logvar: logvar
+ui:
+  outputs:
+    recon: {x: 2220, y: 160}
+    mu: {x: 2220, y: 20}
+    logvar: {x: 2220, y: 300}

@@ -1,0 +1,61 @@
+format_version: 1
+name: diffusion_denoiser
+description: >-
+  拡散モデルの雑音の予測器: 雑音を加えたデータ x と時刻 t から,
+  加えた雑音を予測する.
+  学習の step で時刻を引いて x に雑音を加え, 予測と雑音の二乗誤差を計算する
+  (雑音の加え方と生成の繰り返しは学習のコードに書く)
+inputs:
+  x: {shape: [8, 16], ui: {x: 0, y: 60}}
+  t: {shape: [8], dtype: int64, fill: arange, ui: {x: 0, y: 260}}
+nodes:
+  # 時刻の埋め込み (正弦波の 32 次元 → 全結合 → SiLU)
+  t_emb:
+    unit: op.SinusoidalEmbedding
+    params: {embedding_dim: 32}
+    inputs: t
+    ui: {x: 220, y: 260}
+  t_fc:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 32}
+    inputs: t_emb
+    ui: {x: 470, y: 260}
+  t_act:
+    unit: nn.SiLU
+    inputs: t_fc
+    ui: {x: 720, y: 260}
+  # データの埋め込み (16 → 32)
+  x_fc:
+    unit: nn.Linear
+    params: {in_features: 16, out_features: 32}
+    inputs: x
+    ui: {x: 470, y: 60}
+  # データと時刻の埋め込みの和
+  add:
+    unit: op.Add
+    inputs: {xs: [x_fc, t_act]}
+    ui: {x: 970, y: 160}
+  # 雑音を予測する全結合 (32 → 32 → 16)
+  act1:
+    unit: nn.SiLU
+    inputs: add
+    ui: {x: 1220, y: 160}
+  fc1:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 32}
+    inputs: act1
+    ui: {x: 1470, y: 160}
+  act2:
+    unit: nn.SiLU
+    inputs: fc1
+    ui: {x: 1720, y: 160}
+  head:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 16}
+    inputs: act2
+    ui: {x: 1970, y: 160}
+outputs:
+  noise: head
+ui:
+  outputs:
+    noise: {x: 2220, y: 180}

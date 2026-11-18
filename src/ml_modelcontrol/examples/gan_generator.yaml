@@ -1,0 +1,35 @@
+format_version: 1
+name: gan_generator
+description: >-
+  GAN の生成器: 乱数のベクトルから偽のデータを作る.
+  学習の step で識別器 (gan_discriminator) に偽を本物と判定させる損失を計算し,
+  識別器とは別の最適化手法で交互に更新する
+inputs:
+  z: {shape: [8, 16], ui: {x: 0, y: 100}}
+nodes:
+  # 乱数のベクトルを広げる層 (16 → 32)
+  fc1:
+    unit: nn.Linear
+    params: {in_features: 16, out_features: 32}
+    inputs: z
+    ui: {x: 220, y: 80}
+  act:
+    unit: nn.ReLU
+    inputs: fc1
+    ui: {x: 470, y: 80}
+  # データの次元への変換 (32 → 24)
+  fc2:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 24}
+    inputs: act
+    ui: {x: 720, y: 80}
+  # 値を -1 から 1 に収める出力 (本物のデータも同じ範囲に揃える)
+  out:
+    unit: nn.Tanh
+    inputs: fc2
+    ui: {x: 970, y: 80}
+outputs:
+  fake: out
+ui:
+  outputs:
+    fake: {x: 1220, y: 100}

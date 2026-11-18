@@ -1,0 +1,33 @@
+format_version: 1
+name: gan_discriminator
+description: >-
+  GAN の識別器: データが本物かどうかのロジットを返す.
+  学習の step で本物を 1,
+  偽 (生成器の出力の勾配を切り離したもの) を 0 とする二値の交差エントロピー
+  (ロジットを受け取るもの) を計算し,
+  生成器 (gan_generator) とは別の最適化手法で交互に更新する
+inputs:
+  x: {shape: [8, 24], ui: {x: 0, y: 100}}
+nodes:
+  # 特徴を取り出す層 (24 → 32)
+  fc1:
+    unit: nn.Linear
+    params: {in_features: 24, out_features: 32}
+    inputs: x
+    ui: {x: 220, y: 80}
+  act:
+    unit: nn.LeakyReLU
+    params: {negative_slope: 0.2}
+    inputs: fc1
+    ui: {x: 470, y: 80}
+  # 本物らしさのロジット (32 → 1. シグモイドは損失の側で掛ける)
+  head:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 1}
+    inputs: act
+    ui: {x: 720, y: 80}
+outputs:
+  logit: head
+ui:
+  outputs:
+    logit: {x: 970, y: 100}
