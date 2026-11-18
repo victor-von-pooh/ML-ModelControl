@@ -249,3 +249,22 @@ def test_chunk_index_check() -> None:
     assert found == [("invalid_combination", "mu", "params.index")]
     spec["nodes"]["mu"]["params"]["index"] = -2
     assert validate(spec) == []
+
+
+def test_variadic_port_notes() -> None:
+    """
+    可変の口の説明が, 順に意味がある演算と無い演算で違うことを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 足し算と掛け算は順に関係しない, つなぐと重ねるは書いた順
+    notes = {name: get_unit(f"op.{name}").inputs[0].description
+             for name in ("Add", "Multiply", "Concat", "Stack")}
+    assert "関係しない" in notes["Add"] and "関係しない" in notes["Multiply"]
+    assert "書いた順" in notes["Concat"] and "書いた順" in notes["Stack"]
