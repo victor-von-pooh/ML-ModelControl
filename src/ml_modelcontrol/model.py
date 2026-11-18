@@ -197,7 +197,8 @@ class GraphModel(nn.Module):
         Parameters
         ----------
         values: dict[str, Any]
-            入力とノードの戻り値
+            入力とノードの戻り値 (compute では, 渡した口の値も
+            「ノード:口」のキーで持つ)
         target: tuple
             名前と出力の口の名前 (口の名前が無い場合は None)
 
@@ -207,15 +208,21 @@ class GraphModel(nn.Module):
             つなぎ先の値
         """
         # 入力はそのまま, ノードは口の取り出し方で取り出し
+        # (compute で口の値を渡した場合はその値)
         name, port = target
-        value = values[name]
-        if name in self.paths:
-            paths = self.paths[name]
+        paths = self.paths.get(name)
+        port_name = None
+        if paths is not None:
             port_name = port if port is not None else next(iter(paths))
+        if paths is None:
+            value = values[name]
+        elif f"{name}:{port_name}" in values:
+            value = values[f"{name}:{port_name}"]
+        else:
             # 取り出せない場合は, どのノードのどの口かを添える
             try:
                 value = follow_path(
-                    value, paths[port_name], name in self.lenient
+                    values[name], paths[port_name], name in self.lenient
                 )
             except (KeyError, IndexError, AttributeError) as error:
                 raise ValueError(
@@ -302,6 +309,175 @@ class GraphModel(nn.Module):
         }
         if len(result) == 1:
             result = next(iter(result.values()))
+
+        return result
+
+    def port_key(self, ref: str) -> str:
+        """
+        compute に渡した値の名前を, 入力の名前か「ノード:口」に直す関数
+
+        Parameters
+        ----------
+        ref: str
+            「入力の名前」「ノードの名前」(最初の出力の口) か
+            「ノードの名前:口の名前」
+
+        Returns
+        ----------
+        key: str
+            入力の名前か「ノードの名前:口の名前」
+
+        Raises
+        ----------
+        ValueError
+            入力にもノードにも無い名前と, ノードに無い口の場合
+        """
+        # 入力はそのまま, ノードは口の名前を補ったもの
+        name, port = parse_ref(str(ref))
+        if port is None and name in self.input_names:
+            return name
+        if name not in self.paths:
+            raise ValueError(
+                f"入力にもノードにも {ref} はありません"
+            )
+        ports = list(self.paths[name])
+        port_name = port if port is not None else ports[0]
+        if port_name not in ports:
+            raise ValueError(
+                f"ノード {name} に出力の口 {port_name} はありません "
+                f"(口は {', '.join(ports)})"
+            )
+        key = f"{name}:{port_name}"
+
+        return key
+
+    def needed_nodes(self, outputs: list[str], given: set[str]) -> list[str]:
+        """
+        求める出力に要るノードを, 計算の順に返す関数
+
+        出力のつなぎ先から前へたどり, 値を渡した入力と口の所で止める
+
+        Parameters
+        ----------
+        outputs: list[str]
+            求める出力の名前 (定義の出力にあるもの)
+        given: set[str]
+            値を渡した入力の名前と「ノード:口」(port_key で直したもの)
+
+        Returns
+        ----------
+        needed: list[str]
+            計算するノードの名前 (計算の順)
+
+        Raises
+        ----------
+        ValueError
+            要る入力の値が渡されていない場合
+        """
+        # 出力ごとに前へたどり, 要るノードと渡されていない入力を集約
+        needed_set: set[str] = set()
+        missing: dict[str, list[str]] = {}
+        for output in outputs:
+            visited: set[str] = set()
+            stack = [parse_ref(self.outputs[output])]
+            while stack:
+                name, port = stack.pop()
+                if name in self.input_names:
+                    if name not in given and name not in visited:
+                        missing.setdefault(output, []).append(name)
+                    visited.add(name)
+                    continue
+                port_name = port if port is not None else next(
+                    iter(self.paths[name])
+                )
+                if f"{name}:{port_name}" in given or name in visited:
+                    continue
+                visited.add(name)
+                needed_set.add(name)
+                for targets in self.connections[name].values():
+                    stack.extend(targets)
+
+        # 渡されていない入力の, 出力ごとの案内
+        if missing:
+            lines = [
+                f"出力 {output} の計算に要る入力 "
+                f"{', '.join(sorted(names))} が渡されていません"
+                for output, names in missing.items()
+            ]
+            raise ValueError(
+                "\n".join(lines) + "\n(途中のノードの値を渡す場合は, その"
+                "ノードの名前か「ノード:口」をキーにし, 要らない出力は "
+                "outputs で除いてください)"
+            )
+
+        # 要るノードの計算の順への並べ替え
+        needed = [name for name in self.order if name in needed_set]
+
+        return needed
+
+    def compute(
+        self, values: dict[str, Any],
+        outputs: Optional[Union[str, list[str]]] = None
+    ) -> dict[str, Any]:
+        """
+        渡した値から, 求める出力に要るノードだけを計算する関数
+
+        値は入力だけでなく途中のノードの出力の口にも渡せ (定義のつなぎ先と
+        同じく「ノード」か「ノード:口」), その値だけから求まるノードは
+        計算しない. 重みはこのモデルのものをそのまま使う (復号器だけを
+        呼ぶ, 品物の塔だけを呼ぶなど)
+
+        Parameters
+        ----------
+        values: dict[str, Any]
+            入力の名前, ノードの名前 (最初の出力の口) か「ノード:口」ごとの
+            値
+        outputs: Optional[Union[str, list[str]]] = None
+            求める出力の名前 (1 つなら文字, 複数ならリスト), None なら
+            全ての出力
+
+        Returns
+        ----------
+        result: dict[str, Any]
+            求めた出力の名前ごとの値 (出力が 1 つでも辞書)
+
+        Raises
+        ----------
+        TypeError
+            values が辞書でない場合
+        ValueError
+            出力か値の名前が無い場合と, 要る入力の値が渡されていない場合
+        """
+        # 求める出力と, 渡した値の名前の確認
+        if not isinstance(values, dict):
+            raise TypeError(
+                "values は名前ごとの値の辞書で渡してください "
+                "(例: {\"z\": z})"
+            )
+        if outputs is None:
+            names = list(self.outputs)
+        elif isinstance(outputs, str):
+            names = [outputs]
+        else:
+            names = list(dict.fromkeys(outputs))
+        unknown = [name for name in names if name not in self.outputs]
+        if unknown:
+            raise ValueError(
+                f"出力 {', '.join(map(str, unknown))} はありません (出力は "
+                f"{', '.join(self.outputs)})"
+            )
+        given = {self.port_key(key): value for key, value in values.items()}
+
+        # 要るノードだけを計算の順に計算
+        computed = dict(given)
+        for name in self.needed_nodes(names, set(given)):
+            computed[name] = self.run_node(name, computed)
+
+        # 求めた出力の取り出し
+        result = {
+            name: self.resolve(computed, parse_ref(self.outputs[name]))
+            for name in names
+        }
 
         return result
 
