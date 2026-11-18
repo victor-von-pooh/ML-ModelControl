@@ -305,6 +305,125 @@ class GraphModel(nn.Module):
 
         return result
 
+    def needed_nodes(self, outputs: list[str], given: set[str]) -> list[str]:
+        """
+        求める出力に要るノードを, 計算の順に返す関数
+
+        出力のつなぎ先から前へたどり, 値を渡した名前の所で止める
+
+        Parameters
+        ----------
+        outputs: list[str]
+            求める出力の名前
+        given: set[str]
+            値を渡した入力とノードの名前
+
+        Returns
+        ----------
+        needed: list[str]
+            計算するノードの名前 (計算の順)
+
+        Raises
+        ----------
+        ValueError
+            要る入力の値が渡されていない場合
+        """
+        # 出力ごとに前へたどり, 要るノードと渡されていない入力を集約
+        needed_set: set[str] = set()
+        missing: dict[str, list[str]] = {}
+        for output in outputs:
+            visited: set[str] = set()
+            stack = [parse_ref(self.outputs[output])[0]]
+            while stack:
+                name = stack.pop()
+                if name in given or name in visited:
+                    continue
+                visited.add(name)
+                if name in self.input_names:
+                    missing.setdefault(output, []).append(name)
+                    continue
+                needed_set.add(name)
+                for targets in self.connections[name].values():
+                    stack.extend(target for target, _ in targets)
+
+        # 渡されていない入力の, 出力ごとの案内
+        if missing:
+            lines = [
+                f"出力 {output} の計算に要る入力 "
+                f"{', '.join(sorted(names))} が渡されていません"
+                for output, names in missing.items()
+            ]
+            raise ValueError(
+                "\n".join(lines) + "\n(途中のノードの値を渡す場合は, その"
+                "ノードの名前をキーにしてください)"
+            )
+        needed = [name for name in self.order if name in needed_set]
+
+        return needed
+
+    def compute(
+        self, values: dict[str, Any],
+        outputs: Optional[Union[str, list[str]]] = None
+    ) -> dict[str, Any]:
+        """
+        渡した値から, 求める出力に要るノードだけを計算する関数
+
+        値は入力だけでなく途中のノードにも渡せ (ノードの戻り値の代わりに
+        使う), その値だけから求まるノードは計算しない. 重みはこのモデルの
+        ものをそのまま使う (復号器だけを呼ぶ, 品物の塔だけを呼ぶなど)
+
+        Parameters
+        ----------
+        values: dict[str, Any]
+            入力かノードの名前ごとの値
+        outputs: Optional[Union[str, list[str]]] = None
+            求める出力の名前 (1 つなら文字), None なら全ての出力
+
+        Returns
+        ----------
+        result: dict[str, Any]
+            求めた出力の名前ごとの値 (出力が 1 つでも辞書)
+
+        Raises
+        ----------
+        ValueError
+            出力か値の名前が無い場合と, 要る入力の値が渡されていない場合
+        """
+        # 求める出力と, 渡した値の名前の確認
+        if outputs is None:
+            names = list(self.outputs)
+        elif isinstance(outputs, str):
+            names = [outputs]
+        else:
+            names = list(outputs)
+        unknown = [name for name in names if name not in self.outputs]
+        if unknown:
+            raise ValueError(
+                f"出力 {', '.join(unknown)} はありません (出力は "
+                f"{', '.join(self.outputs)})"
+            )
+        unknown = [
+            str(key) for key in values
+            if key not in self.input_names and key not in self.nodes
+        ]
+        if unknown:
+            raise ValueError(
+                f"入力にもノードにも {', '.join(unknown)} はありません"
+            )
+
+        # 要るノードだけを計算の順に計算
+        computed = dict(values)
+        for name in self.needed_nodes(names, set(values)):
+            computed[name] = self.run_node(name, computed)
+
+        # 求めた出力の取り出し
+        result = {
+            name: self.resolve(computed, parse_ref(self.outputs[name]))
+            for name in names
+        }
+
+        return result
+
 
 def build_model(
     spec: Union[str, Path, dict], seed: Optional[int] = None
