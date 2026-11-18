@@ -385,3 +385,289 @@ class Equal(nn.Module):
         mask = input == self.value
 
         return mask
+
+
+class Exp(nn.Module):
+    def __init__(self):
+        # 親クラスのコンストラクタを呼び出す
+        super(Exp, self).__init__()
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        """
+        要素ごとに指数を取る関数
+
+        対数分散から分散を作るときなどに使う
+
+        Parameters
+        ----------
+        input: torch.Tensor
+            指数を取るテンソル
+
+        Returns
+        ----------
+        output: torch.Tensor
+            同じ形の指数のテンソル
+        """
+        output = torch.exp(input)
+
+        return output
+
+
+class Scale(nn.Module):
+    def __init__(self, factor: float = 1.0):
+        # 親クラスのコンストラクタを呼び出す
+        super(Scale, self).__init__()
+
+        # 掛ける定数を保存
+        self.factor = factor
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        """
+        入力に決めた定数を掛ける関数
+
+        対数分散を半分にする (0.5) ときや, 類似度を温度で割る (1 / 温度)
+        ときに使う
+
+        Parameters
+        ----------
+        input: torch.Tensor
+            掛けるテンソル
+
+        Returns
+        ----------
+        output: torch.Tensor
+            定数を掛けたテンソル
+        """
+        output = input * self.factor
+
+        return output
+
+
+class Chunk(nn.Module):
+    def __init__(self, chunks: int = 2, index: int = 0, dim: int = 1):
+        # 親クラスのコンストラクタを呼び出す
+        super(Chunk, self).__init__()
+
+        # 分ける数, 取り出す番号, 分ける次元を保存
+        self.chunks = chunks
+        self.index = index
+        self.dim = dim
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        """
+        決めた次元を chunks 個に等分し, index 番目を取り出す関数
+
+        出力の口は部品ごとに決まっているので, 分けた全てを返さず 1 つだけを
+        返す. VAE の符号化器の出力から平均 (index 0) と対数分散 (index 1)
+        を取り出すときなどに使う
+
+        Parameters
+        ----------
+        input: torch.Tensor
+            分けるテンソル (分ける次元の大きさは chunks で割り切れる)
+
+        Returns
+        ----------
+        piece: torch.Tensor
+            取り出したテンソル (分ける次元の大きさは元の 1 / chunks)
+
+        Raises
+        ----------
+        ValueError
+            分ける数か番号が範囲の外の場合と, 割り切れない場合
+        """
+        # 分ける数と番号の確認
+        if self.chunks < 1:
+            raise ValueError(
+                f"分ける数 chunks は 1 以上にしてください ({self.chunks})"
+            )
+        if not -self.chunks <= self.index < self.chunks:
+            raise ValueError(
+                f"番号 index {self.index} は -{self.chunks} 以上 "
+                f"{self.chunks - 1} 以下にしてください"
+            )
+
+        # 割り切れる場合だけ, 等分した index 番目の取り出し
+        size = input.shape[self.dim]
+        if size % self.chunks != 0:
+            raise ValueError(
+                f"次元 {self.dim} の大きさ {size} は chunks {self.chunks} "
+                "で割り切れません"
+            )
+        width = size // self.chunks
+        start = (self.index % self.chunks) * width
+        piece = input.narrow(self.dim, start, width)
+
+        return piece
+
+
+class L2Normalize(nn.Module):
+    def __init__(self, dim: int = -1, eps: float = 1e-12):
+        # 親クラスのコンストラクタを呼び出す
+        super(L2Normalize, self).__init__()
+
+        # 正規化する次元と, 割り算を安定させる小さな数を保存
+        self.dim = dim
+        self.eps = eps
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        """
+        決めた次元の L2 ノルムが 1 になるように割る関数
+
+        対照学習の埋め込みや, コサイン類似度の前処理に使う
+
+        Parameters
+        ----------
+        input: torch.Tensor
+            正規化するテンソル
+
+        Returns
+        ----------
+        output: torch.Tensor
+            同じ形の正規化したテンソル (割るノルムの下限は eps)
+        """
+        norm = input.norm(p=2, dim=self.dim, keepdim=True).clamp_min(self.eps)
+        output = input / norm
+
+        return output
+
+
+class MatMul(nn.Module):
+    def __init__(self):
+        # 親クラスのコンストラクタを呼び出す
+        super(MatMul, self).__init__()
+
+    def forward(
+        self, input: torch.Tensor, other: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        2 つの入力の行列の積を取る関数 (torch.matmul と同じ規則)
+
+        2 つの埋め込みの類似度の表 ((N, D) と (D, M) から (N, M)) などに
+        使う. 右の入力の転置は op.Transpose で行う
+
+        Parameters
+        ----------
+        input: torch.Tensor
+            左の行列
+        other: torch.Tensor
+            右の行列
+
+        Returns
+        ----------
+        product: torch.Tensor
+            行列の積
+        """
+        product = torch.matmul(input, other)
+
+        return product
+
+
+class Detach(nn.Module):
+    def __init__(self):
+        # 親クラスのコンストラクタを呼び出す
+        super(Detach, self).__init__()
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        """
+        値はそのままに, 手前の層に勾配を流さないようにする関数
+
+        目標の側の枝 (BYOL や SimSiam) や, 量子化の勾配の素通しなどに使う
+
+        Parameters
+        ----------
+        input: torch.Tensor
+            切り離すテンソル
+
+        Returns
+        ----------
+        output: torch.Tensor
+            同じ値で勾配を持たないテンソル
+        """
+        output = input.detach()
+
+        return output
+
+
+class SinusoidalEmbedding(nn.Module):
+    def __init__(self, embedding_dim: int, max_period: float = 10000.0):
+        # 親クラスのコンストラクタを呼び出す
+        super(SinusoidalEmbedding, self).__init__()
+
+        # 埋め込みの大きさと, 最も長い周期を保存
+        self.embedding_dim = embedding_dim
+        self.max_period = max_period
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        """
+        時刻 (位置) の値を, 周期の違う cos と sin を並べた埋め込みにする関数
+
+        拡散モデルの時刻の埋め込みに使う. 前半が cos, 後半が sin で,
+        周波数は 1 から 1 / max_period に向けて等比で並べる (1 / max_period
+        は含まない). 出力は入力の型に依らず float32 (embedding_dim が奇数の
+        場合は最後に 0 を 1 列足す)
+
+        Parameters
+        ----------
+        input: torch.Tensor
+            時刻のテンソル (例: (バッチ,) の整数か小数)
+
+        Returns
+        ----------
+        embedding: torch.Tensor
+            (*入力の形, embedding_dim) の float32 のテンソル
+        """
+        # 周波数の作成 (half 個. 1 から 1 / max_period に向けて等比)
+        half = self.embedding_dim // 2
+        exponents = torch.arange(
+            half, dtype=torch.float32, device=input.device
+        ) / max(half, 1)
+        frequencies = float(self.max_period) ** (-exponents)
+
+        # 時刻と周波数の積の cos と sin を並べ, 奇数なら 0 の列を追加
+        angles = input.float().unsqueeze(-1) * frequencies
+        embedding = torch.cat([torch.cos(angles), torch.sin(angles)], dim=-1)
+        if self.embedding_dim % 2 == 1:
+            embedding = torch.cat(
+                [embedding, torch.zeros_like(embedding[..., :1])], dim=-1
+            )
+
+        return embedding
+
+
+class Reparameterize(nn.Module):
+    def __init__(self, sample_in_eval: bool = False):
+        # 親クラスのコンストラクタを呼び出す
+        super(Reparameterize, self).__init__()
+
+        # 評価の形でも乱数を引くかを保存
+        self.sample_in_eval = sample_in_eval
+
+    def forward(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+        """
+        平均と対数分散から, 再パラメータ化で潜在変数を引く関数 (VAE)
+
+        z = mu + exp(logvar / 2) * eps (eps は標準正規分布の乱数) で,
+        勾配は mu と logvar に流れる. 評価の形 (eval()) では,
+        sample_in_eval が False なら乱数を引かずに mu を返す
+
+        Parameters
+        ----------
+        mu: torch.Tensor
+            平均
+        logvar: torch.Tensor
+            対数分散 (mu と同じ形)
+
+        Returns
+        ----------
+        z: torch.Tensor
+            潜在変数 (mu と同じ形)
+        """
+        # 評価の形で乱数を引かない場合は平均のまま
+        if not self.training and not self.sample_in_eval:
+            z = mu
+        else:
+            std = torch.exp(0.5 * logvar)
+            z = mu + torch.randn_like(std) * std
+
+        return z
