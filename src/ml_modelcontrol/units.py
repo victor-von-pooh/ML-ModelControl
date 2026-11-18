@@ -293,7 +293,25 @@ OPS = [
      "(バッチ, 長さ) の位置の番号を作る (位置の埋め込みの入力)", False),
     ("Equal", ops.Equal,
      "値が value に等しい所を True にする (例: 詰め物の番号から注意の印)",
-     False)
+     False),
+    ("Exp", ops.Exp, "要素ごとに指数を取る (例: 対数分散から分散)", False),
+    ("Scale", ops.Scale, "factor 倍にする (例: 0.5 倍, 温度で割る)", False),
+    ("Chunk", ops.Chunk,
+     "dim の次元を chunks 個に等分し, index 番目を取り出す (例: VAE の平均"
+     "と対数分散)", False),
+    ("L2Normalize", ops.L2Normalize,
+     "dim の次元の L2 ノルムが 1 になるように割る (例: 対照学習の埋め込み)",
+     False),
+    ("MatMul", ops.MatMul,
+     "input と other の行列の積を取る (例: 埋め込みの類似度の表)", False),
+    ("Detach", ops.Detach,
+     "値はそのままに手前の層に勾配を流さない (例: 目標の側の枝)", False),
+    ("SinusoidalEmbedding", ops.SinusoidalEmbedding,
+     "時刻の値を, cos と sin を並べた embedding_dim 次元の埋め込みにする "
+     "(例: 拡散の時刻. 出力は float32)", False),
+    ("Reparameterize", ops.Reparameterize,
+     "平均と対数分散から潜在変数を引く (VAE の再パラメータ化. 評価の形では"
+     "既定で平均)", False)
 ]
 
 # 演算の引数の説明
@@ -331,8 +349,74 @@ OP_PARAM_NOTES = {
     },
     "Equal": {
         "value": {"description": "比べる値 (例: 詰め物の番号 0)"}
+    },
+    "Exp": {}, "MatMul": {}, "Detach": {},
+    "Scale": {"factor": {"description": "掛ける定数 (例: 0.5)"}},
+    "Chunk": {
+        "chunks": {"description": "等分する数 (次元の大きさを割り切る)",
+                   "minimum": 1},
+        "index": {"description": "取り出す番号 (0 から. 負の数は後ろから)"},
+        "dim": {"description": "分ける次元 (バッチも含む. 負の数は後ろから)"}
+    },
+    "L2Normalize": {
+        "dim": {"description": "正規化する次元 (負の数は後ろから)"},
+        "eps": {"description": "ノルムの下限 (0 で割らないため)",
+                "minimum": 0.0}
+    },
+    "SinusoidalEmbedding": {
+        "embedding_dim": {"description": "埋め込みの大きさ", "minimum": 1},
+        "max_period": {"description": "周波数の下限を決める数 (1 / max_period に向けて下げる)",
+                       "minimum": 1.0}
+    },
+    "Reparameterize": {
+        "sample_in_eval": {
+            "description": "評価の形 (eval()) でも乱数を引くか (false なら"
+                           "平均を返す)"
+        }
     }
 }
+
+# 演算の入力の口の説明 (口が input だけのものは省略)
+OP_PORT_NOTES = {
+    "MatMul": {"input": "左の行列", "other": "右の行列"},
+    "Reparameterize": {"mu": "平均", "logvar": "対数分散 (mu と同じ形)"}
+}
+
+
+def check_chunk(params: dict) -> list[tuple[str, str]]:
+    """
+    op.Chunk の引数の組み合わせ (番号が分ける数の範囲か) を確かめる関数
+
+    Parameters
+    ----------
+    params: dict
+        定義の params
+
+    Returns
+    ----------
+    found: list[tuple[str, str]]
+        誤りの場所と説明の組
+    """
+    # 整数で書かれた場合だけ, 番号の範囲を確認
+    found = []
+    chunks = params.get("chunks", 2)
+    index = params.get("index", 0)
+    if (
+        isinstance(chunks, int) and isinstance(index, int)
+        and not isinstance(chunks, bool) and not isinstance(index, bool)
+        and chunks >= 1 and not -chunks <= index < chunks
+    ):
+        found.append((
+            "params.index",
+            f"index {index} は -{chunks} 以上 {chunks - 1} 以下にしてください "
+            f"(chunks が {chunks} のため)"
+        ))
+
+    return found
+
+
+# 演算の引数の組み合わせを確かめる関数
+OP_CHECKERS = {"Chunk": check_chunk}
 
 # 組み込みの部品を読み込んだかどうかの印
 LOADED = {"done": False}
@@ -525,12 +609,14 @@ def register_op(
     spec: UnitSpec
         登録した部品
     """
-    # 可変の数の入力は xs, それ以外は input の口
+    # 可変の数の入力は xs, それ以外は forward の引数の口 (多くは input)
     params, _ = params_from_init(cls)
-    inputs = (
-        [PortSpec("xs", "つなぐ値 (書いた順)", variadic=True)]
-        if variadic else [PortSpec("input")]
-    )
+    if variadic:
+        inputs = [PortSpec("xs", "つなぐ値 (書いた順)", variadic=True)]
+    else:
+        inputs, _ = ports_from_forward(cls)
+        for port in inputs:
+            port.description = OP_PORT_NOTES.get(name, {}).get(port.name, "")
     spec = UnitSpec(
         name=f"op.{name}", category="op", source="ml_modelcontrol",
         description=description, params=params, inputs=inputs,
@@ -538,6 +624,7 @@ def register_op(
         code_name=f"ops.{name}", code_import="from ml_modelcontrol import ops"
     )
     apply_notes(spec, {"params": OP_PARAM_NOTES.get(name, {})})
+    spec.checker = OP_CHECKERS.get(name)
     register(spec)
 
     return spec
