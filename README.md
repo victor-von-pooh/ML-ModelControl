@@ -61,7 +61,7 @@ text = dump_spec(spec)                   # 決まったキーの順の YAML の�
 code = export_python("model.yaml")       # 同じ計算をする Python のコード (下を参照)
 ```
 
-学習したモデルの一部だけを呼ぶ場合は `model.compute(値の辞書, 出力の名前)` を使う. 値は入力だけでなく途中のノードの名前でも渡せ, 求める出力に要るノードだけを計算する (重みはそのモデルのまま. 結果は出力の名前の辞書). 例えば, 学習した VAE の例 (`vae`) の復号器だけを潜在変数から呼ぶ場合は `model.compute({"z": z}, "recon")["recon"]`, 2 塔の例 (`two_tower_retrieval`) の品物の埋め込みだけを前もって計算する場合は `model.compute({"item": item}, "item_embedding")`. 要る入力が渡されていない場合は, どの出力にどの入力が要るかを添えた `ValueError` になる. 書き出したコードには無い (全体の `forward` だけ).
+学習したモデルの一部だけを呼ぶ場合は `model.compute(値の辞書, 出力の名前)` を使う. 値は入力だけでなく途中のノードの出力の口 (定義のつなぎ先と同じく `ノード` か `ノード:口`) にも渡せ, 求める出力に要るノードだけを計算する (重みはそのモデルのまま. 結果は出力の名前の辞書). 例えば, 学習した VAE の例 (`vae`) の復号器だけを潜在変数から呼ぶ場合は `model.compute({"z": z}, "recon")["recon"]`, 2 塔の例 (`two_tower_retrieval`) の品物の埋め込みだけを前もって計算する場合は `model.compute({"item": item}, "item_embedding")`. 要る入力が渡されていない場合は, どの出力にどの入力が要るかを添えた `ValueError` になる. `compute` は書き出したコードには無い (書き出すコードは全体の `forward` だけ).
 
 `validate`, `infer`, `build_model`, `export_python` は, ファイルのパスの代わりに定義の辞書 (`load_spec` で読んだものや, 手で作ったもの) も受け取る. `load_spec` は読み込みと版を直すことだけをし, 誤りは確かめない (確かめるのは `validate`).
 

@@ -157,3 +157,110 @@ def test_compute_missing_input() -> None:
         model.compute({"item": item}, "items")
     with pytest.raises(ValueError, match="入力にもノードにも itme はありません"):
         model.compute({"itme": item}, "item_embedding")
+
+
+def test_compute_port_and_subgraph() -> None:
+    """
+    出力の口が 2 つ以上のノードには「ノード:口」で, 部分モデルのノードには
+    名前で値を渡せることを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # LSTM の最後の隠れ状態 (口 h_n) から分類の頭だけの計算
+    model = build_model(load_example("lstm_classifier"), seed=0)
+    ids = torch.randint(0, 100, (4, 12))
+    with torch.no_grad():
+        full = model(ids)
+        output = model.nodes["lstm"](model.nodes["emb"](ids))
+        part = model.compute({"lstm:h_n": output[1][0]}, "logits")
+    assert torch.allclose(part["logits"], full)
+
+    # 名前だけのキーは最初の口 (output) で, 分類に使う h_n の代わりにならない
+    with pytest.raises(ValueError, match="入力 ids が渡されていません"):
+        model.compute({"lstm": output[0]}, "logits")
+    with pytest.raises(ValueError, match="出力の口 hn はありません"):
+        model.compute({"lstm:hn": output[1][0]}, "logits")
+
+    # 部分モデルを使うノード (block2) の出力から後ろだけの計算
+    blocks = build_model(load_example("stacked_blocks"), seed=0)
+    x = torch.randn(4, 32)
+    with torch.no_grad():
+        full = blocks(x)
+        middle = blocks.nodes["block2"](
+            blocks.nodes["block1"](blocks.nodes["stem"](x))
+        )
+        part = blocks.compute({"block2": middle}, "logits")
+    assert torch.allclose(part["logits"], full)
+
+
+def test_compute_mixed_values() -> None:
+    """
+    要らない値を無視することと, 一部の出力だけに入力が要る場合に, その
+    出力だけを誤りに挙げることを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 入力と潜在変数の両方を渡した場合 (再構成は潜在変数から)
+    model = build_model(load_example("vae"), seed=0).eval()
+    x = torch.randn(8, 16)
+    z = torch.randn(8, 8)
+    with torch.no_grad():
+        both = model.compute({"x": x, "z": z}, ["recon", "mu"])
+        decoded = model.compute({"z": z}, "recon")
+    assert torch.allclose(both["recon"], decoded["recon"])
+    assert torch.allclose(both["mu"], model(x)["mu"])
+
+    # 潜在変数だけで平均も求めた場合は, 平均の出力だけが入力 x を要る
+    with pytest.raises(ValueError) as error:
+        model.compute({"z": z}, ["recon", "mu"])
+    assert "出力 mu の計算に要る入力 x" in str(error.value)
+    assert "出力 recon" not in str(error.value)
+
+    # 値を辞書で渡さない場合
+    with pytest.raises(TypeError, match="辞書で渡して"):
+        model.compute(z, "recon")
+
+
+def test_compute_input_output() -> None:
+    """
+    入力をそのまま出す出力も, 入力を渡せば求まり, 渡さなければ誤りに
+    なることを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 入力をそのまま出す出力を持つ定義
+    spec = {
+        "inputs": {"x": {"shape": [4, 8]}},
+        "nodes": {
+            "fc": {
+                "unit": "nn.Linear",
+                "params": {"in_features": 8, "out_features": 2},
+                "inputs": "x"
+            }
+        },
+        "outputs": {"y": "fc", "raw": "x"}
+    }
+    model = build_model(spec, seed=0)
+    x = torch.randn(4, 8)
+    part = model.compute({"x": x}, "raw")
+    assert part["raw"] is x
+    with pytest.raises(ValueError, match="出力 raw の計算に要る入力 x"):
+        model.compute({"fc": torch.zeros(4, 2)}, ["y", "raw"])
