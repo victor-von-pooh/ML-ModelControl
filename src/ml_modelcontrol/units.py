@@ -376,8 +376,12 @@ OP_PARAM_NOTES = {
     }
 }
 
-# 演算の入力の口の説明 (口が input だけのものは省略)
+# 演算の入力の口の説明 (口が input だけのものは省略. 可変の口は xs)
 OP_PORT_NOTES = {
+    "Add": {"xs": "足す値 (順は結果に関係しない)"},
+    "Multiply": {"xs": "掛ける値 (順は結果に関係しない)"},
+    "Concat": {"xs": "つなぐ値 (書いた順に並ぶ)"},
+    "Stack": {"xs": "重ねる値 (書いた順に並ぶ)"},
     "MatMul": {"input": "左の行列", "other": "右の行列"},
     "Reparameterize": {"mu": "平均", "logvar": "対数分散 (mu と同じ形)"}
 }
@@ -612,7 +616,10 @@ def register_op(
     # 可変の数の入力は xs, それ以外は forward の引数の口 (多くは input)
     params, _ = params_from_init(cls)
     if variadic:
-        inputs = [PortSpec("xs", "つなぐ値 (書いた順)", variadic=True)]
+        inputs = [PortSpec(
+            "xs", OP_PORT_NOTES.get(name, {}).get("xs", "つなぐ値"),
+            variadic=True
+        )]
     else:
         inputs, _ = ports_from_forward(cls)
         for port in inputs:
