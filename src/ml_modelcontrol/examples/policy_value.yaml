@@ -1,0 +1,50 @@
+format_version: 1
+name: policy_value
+description: >-
+  強化学習の方策と価値のモデル (actor-critic): 共通の胴体から,
+  行動ごとのロジットと状態の価値 ((バッチ, 1) の形) を返す.
+  学習の step で方策の勾配の損失と価値の二乗誤差を重み付きで足し,
+  エントロピーの項は引く (探索を促すため).
+  価値は (バッチ,) の目標と比べる前に最後の次元を除く.
+  環境との行き来と, 割引した報酬の和やアドバンテージの計算は学習のコードに書く
+inputs:
+  obs: {shape: [8, 12], ui: {x: 0, y: 160}}
+nodes:
+  # 共通の胴体 (12 → 32 → 32)
+  fc1:
+    unit: nn.Linear
+    params: {in_features: 12, out_features: 32}
+    inputs: obs
+    ui: {x: 220, y: 160}
+  act1:
+    unit: nn.Tanh
+    inputs: fc1
+    ui: {x: 470, y: 160}
+  fc2:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 32}
+    inputs: act1
+    ui: {x: 720, y: 160}
+  act2:
+    unit: nn.Tanh
+    inputs: fc2
+    ui: {x: 970, y: 160}
+  # 方策の頭 (行動ごとのロジット)
+  policy:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 4}
+    inputs: act2
+    ui: {x: 1220, y: 60}
+  # 価値の頭 (状態ごとに 1 つ)
+  value:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 1}
+    inputs: act2
+    ui: {x: 1220, y: 260}
+outputs:
+  logits: policy
+  value: value
+ui:
+  outputs:
+    logits: {x: 1470, y: 80}
+    value: {x: 1470, y: 280}

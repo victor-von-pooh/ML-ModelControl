@@ -1,0 +1,57 @@
+format_version: 1
+name: contrastive_encoder
+description: >-
+  対照学習 (SimCLR の形) の符号化器:
+  1 つのデータの 2 通りの拡張をバッチの前半と後半に並べて入れ,
+  L2 正規化した埋め込みと, 温度で割った類似度の表を返す.
+  学習の step で表の対角を非常に小さな値で隠し,
+  i 番目の正解を同じデータのもう一方 (バッチの数 N の半分だけずらした番号)
+  とする交差エントロピーを計算する
+inputs:
+  # 2 通りの拡張を並べたバッチ (4 件 × 2)
+  x: {shape: [8, 16], ui: {x: 0, y: 100}}
+nodes:
+  # 符号化器 (16 → 32 → 埋め込みの 16)
+  fc1:
+    unit: nn.Linear
+    params: {in_features: 16, out_features: 32}
+    inputs: x
+    ui: {x: 220, y: 80}
+  act:
+    unit: nn.ReLU
+    inputs: fc1
+    ui: {x: 470, y: 80}
+  fc2:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 16}
+    inputs: act
+    ui: {x: 720, y: 80}
+  # 埋め込みの L2 正規化 (内積がコサイン類似度になる)
+  embed:
+    unit: op.L2Normalize
+    params: {dim: -1}
+    inputs: fc2
+    ui: {x: 970, y: 80}
+  # 類似度の表 (埋め込みと, その転置の行列の積. (8, 16) と (16, 8))
+  embed_t:
+    unit: op.Transpose
+    params: {dim0: 0, dim1: 1}
+    inputs: embed
+    ui: {x: 1220, y: 220}
+  sim:
+    unit: op.MatMul
+    inputs: {input: embed, other: embed_t}
+    ui: {x: 1470, y: 120}
+  # 温度 0.1 での割り算 (10 倍)
+  logits:
+    unit: op.Scale
+    params: {factor: 10.0}
+    inputs: sim
+    ui: {x: 1720, y: 120}
+outputs:
+  embedding: embed
+  similarity: logits
+ui:
+  outputs:
+    embedding: {x: 1970, y: 20}
+    similarity: {x: 1970, y: 160}
