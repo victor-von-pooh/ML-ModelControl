@@ -1,5 +1,6 @@
 from importlib import metadata
 
+from ml_modelcontrol.custom import register_units_from
 from ml_modelcontrol.export import export_python
 from ml_modelcontrol.infer import infer
 from ml_modelcontrol.model import GraphModel, SpecError, build_model
@@ -24,5 +25,5 @@ __all__ = [
     "classify_license", "clear_pretrained_cache", "describe_spec_units",
     "describe_units", "dump_spec", "embed_subgraph", "export_python",
     "get_unit", "infer", "list_examples", "load_example", "load_spec",
-    "pretrained_info", "register_unit", "validate"
+    "pretrained_info", "register_unit", "register_units_from", "validate"
 ]

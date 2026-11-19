@@ -11,7 +11,7 @@ from torch import nn
 
 from ml_modelcontrol.pretrained import WEIGHT_OVERRIDE_PARAMS, valid_hub_id
 from ml_modelcontrol.registry import (
-    REGISTRY, ParamSpec, PortSpec, UnitSpec, get_unit
+    REGISTRY, ParamSpec, PortSpec, UnitSpec, get_unit, unregistered_message
 )
 from ml_modelcontrol.spec import (
     GRAPH_KEYS, INPUT_KEYS, NODE_KEYS, SUBGRAPH_PREFIX, load_spec,
@@ -629,9 +629,9 @@ def check_node(
     except KeyError:
         issues.append(Issue(
             "error", "unknown_unit",
-            f"部品 {node.get('unit')!r} は登録されていません"
-            f"{suggest(str(node.get('unit')), unit_names())}", node=name,
-            location="unit"
+            unregistered_message(
+                unit_name, suggest(unit_name, unit_names())
+            ), node=name, location="unit"
         ))
         return
     if not unit.available:
