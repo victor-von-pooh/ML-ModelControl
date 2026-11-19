@@ -33,7 +33,12 @@ HUB = {
     "org/list": {"sha": "e" * 40, "cardData": {"license": ["bsd-3-clause"]}},
     "org/other": {"sha": "f" * 40, "cardData": {"license": "other"}},
     "org/openrail": {"sha": "1" * 40, "cardData": {"license": "openrail"}},
-    "org/empty": {"sha": "2" * 40, "cardData": {}}
+    "org/empty": {"sha": "2" * 40, "cardData": {}},
+    "org/mixed": {
+        "sha": "3" * 40,
+        "cardData": {"license": ["apache-2.0", "cc-by-nc-4.0"]}
+    },
+    "org/bad-tags": {"sha": "4" * 40, "tags": 3}
 }
 
 
@@ -279,6 +284,37 @@ def test_license_from_tags_and_lists() -> None:
     assert hf_info("org/tag-only")["license"] == "mit"
     assert hf_info("org/list")["license"] == "bsd-3-clause"
 
+    # 複数のライセンスは最も厳しいもの
+    mixed = hf_info("org/mixed")
+    assert mixed["licenses"] == ["apache-2.0", "cc-by-nc-4.0"]
+    assert mixed["status"] == "noncommercial"
+    assert hf_info("org/bad-tags")["status"] == "unknown"
+
+
+def test_invalid_inputs(fake_hub: FakeHub) -> None:
+    """
+    置き場の名前の形でない名前は読まず, 辞書でない引数は誤りにすることを
+    確かめる関数
+
+    Parameters
+    ----------
+    fake_hub: FakeHub
+        差し替えた Hugging Face を読む関数
+
+    Returns
+    ----------
+    None
+    """
+    for name in ("../../api/whoami-v2", "a/b/c", "org/..", "a b"):
+        info = hf_info(name)
+        assert info["status"] == "unknown" and info["url"] is None
+    assert fake_hub.calls == []
+    assert pretrained_info(
+        "hf.AutoModel", {"model_name": "org/apache", "pretrained": ""}
+    ) is None
+    with pytest.raises(TypeError):
+        pretrained_info("hf.AutoModel", ["org/apache"])  # type: ignore
+
 
 def test_unreadable_and_cache(
     fake_hub: FakeHub, monkeypatch: pytest.MonkeyPatch
@@ -310,10 +346,16 @@ def test_unreadable_and_cache(
     assert fake_hub.calls.count(("org/apache", "main")) == 1
     assert fake_hub.calls.count(("org/missing", "main")) == 1
 
+    # トークンを設定したら読み直す
+    monkeypatch.setenv("HF_TOKEN", "token")
+    hf_info("org/missing")
+    assert fake_hub.calls.count(("org/missing", "main")) == 2
+    monkeypatch.delenv("HF_TOKEN")
+
     # 読めなかった結果は期限が過ぎたら読み直し, 消したら全て読み直す
     monkeypatch.setattr(pretrained, "FAILURE_CACHE_SECONDS", -1)
     hf_info("org/missing")
-    assert fake_hub.calls.count(("org/missing", "main")) == 2
+    assert fake_hub.calls.count(("org/missing", "main")) == 3
     clear_pretrained_cache()
     hf_info("org/apache")
     assert fake_hub.calls.count(("org/apache", "main")) == 2
@@ -426,7 +468,9 @@ def test_fetch_hub_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
     assert request.full_url == (
         "https://mirror.example/api/models/org/model/revision/refs%2Fpr%2F1"
     )
-    assert request.get_header("Authorization") == "Bearer secret-token"
+    assert request.unredirected_hdrs["Authorization"] == (
+        "Bearer secret-token"
+    )
 
     # 無いモデルとネットワークの誤りは読めない理由
     monkeypatch.setattr(
@@ -501,7 +545,8 @@ def test_timm(fake_hub: FakeHub, monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("timm")
     assert pretrained_info("timm.Model", {"model_name": "resnet18"}) is None
 
-    # 設定の置き場が読めない場合は設定のライセンス (版は分からない)
+    # 設定の置き場が読めない場合は設定のライセンスを見せるが, 配布元で
+    # 確かめていないので分からないもの
     info = pretrained_info(
         "timm.Model", {"model_name": "resnet18", "pretrained": True}
     )
@@ -510,7 +555,8 @@ def test_timm(fake_hub: FakeHub, monkeypatch: pytest.MonkeyPatch) -> None:
     assert hub_id and hub_id.startswith("timm/")
     assert fake_hub.calls == [(hub_id, "main")]
     assert info["source"].startswith("timm のモデルの設定から読んだ")
-    assert info["pinned_revision"] is None
+    assert info["license"] and info["status"] == "unknown"
+    assert info["alert"] is True and info["pinned_revision"] is None
 
     # 置き場が読めた場合は Hugging Face のライセンスと版
     clear_pretrained_cache()

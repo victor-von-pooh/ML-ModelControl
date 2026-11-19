@@ -1,5 +1,7 @@
+import http.client
 import json
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -43,6 +45,12 @@ LICENSE_TABLE = {
 # 表に無い識別子のうち, 頭で商用で使えないと分かるもの (版の違い)
 NONCOMMERCIAL_PREFIXES = ("cc-by-nc",)
 
+# 分類の厳しさの順 (複数のライセンスを持つ重みは最も厳しいもの)
+STATUS_ORDER = ("commercial", "unknown", "noncommercial")
+
+# Hugging Face の置き場の名前の形 (組織の名前/モデルの名前. .. は除く)
+HUB_ID_PATTERN = re.compile(r"[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?")
+
 # 分類ごとの画面の言葉
 STATUS_TEXT = {
     "commercial": "商用で使える",
@@ -58,8 +66,9 @@ FAILURE_CACHE_SECONDS = 10 * 60
 # Hugging Face の API を待つ秒数
 FETCH_TIMEOUT = 10.0
 
-# 置き場の名前と版ごとの Hugging Face の結果 (読んだ時刻, 結果)
-CACHE: dict[tuple[str, str], tuple[float, dict]] = {}
+# 置き場の名前, 版, トークンの有無ごとの Hugging Face の結果
+# (読んだ時刻, 結果)
+CACHE: dict[tuple[str, str, bool], tuple[float, dict]] = {}
 CACHE_LOCK = threading.Lock()
 
 
@@ -89,6 +98,50 @@ def classify_license(license_id: Optional[str]) -> str:
         status = "noncommercial"
 
     return status
+
+
+def classify_licenses(license_ids: list[str]) -> str:
+    """
+    複数のライセンスの識別子を, 最も厳しい分類にまとめる関数
+
+    Parameters
+    ----------
+    license_ids: list[str]
+        ライセンスの識別子のリスト (空なら分からないもの)
+
+    Returns
+    ----------
+    status: str
+        commercial, noncommercial, unknown のどれか
+    """
+    # 1 つも無ければ分からないもの, あれば厳しさの順で最大
+    statuses = [classify_license(item) for item in license_ids]
+    status = max(statuses or ["unknown"], key=STATUS_ORDER.index)
+
+    return status
+
+
+def valid_hub_id(hub_id: str) -> bool:
+    """
+    Hugging Face の置き場の名前として読める形かを返す関数
+
+    Parameters
+    ----------
+    hub_id: str
+        置き場の名前
+
+    Returns
+    ----------
+    valid: bool
+        組織の名前/モデルの名前 (か名前だけ) の形で, . と .. でない場合は
+        True (API の別の道を読まないため)
+    """
+    parts = hub_id.split("/")
+    valid = bool(HUB_ID_PATTERN.fullmatch(hub_id)) and all(
+        part not in (".", "..") for part in parts
+    )
+
+    return valid
 
 
 def hub_token() -> Optional[str]:
@@ -177,7 +230,8 @@ def fetch_hub_metadata(hub_id: str, revision: str) -> dict:
     request = urllib.request.Request(url)
     token = hub_token()
     if token:
-        request.add_header("Authorization", f"Bearer {token}")
+        # 転送先 (別のホストのこともある) には渡さない
+        request.add_unredirected_header("Authorization", f"Bearer {token}")
     try:
         with urllib.request.urlopen(
             request, timeout=FETCH_TIMEOUT
@@ -192,7 +246,10 @@ def fetch_hub_metadata(hub_id: str, revision: str) -> dict:
         raise HubError(
             f"Hugging Face の応答の誤り (HTTP {error.code})"
         ) from error
-    except (urllib.error.URLError, TimeoutError, OSError) as error:
+    except (
+        urllib.error.URLError, http.client.HTTPException, TimeoutError,
+        OSError
+    ) as error:
         raise HubError("ネットワークの誤り") from error
     except ValueError as error:
         raise HubError("Hugging Face の応答を読めない") from error
@@ -202,7 +259,7 @@ def fetch_hub_metadata(hub_id: str, revision: str) -> dict:
     return metadata
 
 
-def license_from_metadata(metadata: dict) -> Optional[str]:
+def licenses_from_metadata(metadata: dict) -> list[str]:
     """
     Hugging Face のモデルの情報からライセンスの識別子を取り出す関数
 
@@ -213,22 +270,24 @@ def license_from_metadata(metadata: dict) -> Optional[str]:
 
     Returns
     ----------
-    license_id: Optional[str]
-        モデルの説明の license (無ければ license: のタグ), 無ければ None
+    license_ids: list[str]
+        モデルの説明の license の全て (無ければ license: のタグの全て),
+        無ければ空
     """
-    # モデルの説明 (リストの場合は先頭) を先に, 無ければタグ
-    card = metadata.get("cardData") or {}
+    # モデルの説明を先に, 無ければタグ (どちらもリストの全て)
+    card = metadata.get("cardData")
     value = card.get("license") if isinstance(card, dict) else None
-    if isinstance(value, list):
-        value = value[0] if value else None
-    license_id = value if isinstance(value, str) and value else None
-    if license_id is None:
-        for tag in metadata.get("tags") or []:
-            if isinstance(tag, str) and tag.startswith("license:"):
-                license_id = tag.split(":", 1)[1] or None
-                break
+    values = value if isinstance(value, list) else [value]
+    license_ids = [item for item in values if isinstance(item, str) and item]
+    tags = metadata.get("tags")
+    if not license_ids and isinstance(tags, list):
+        license_ids = [
+            tag.split(":", 1)[1] for tag in tags
+            if isinstance(tag, str) and tag.startswith("license:")
+            and tag.split(":", 1)[1]
+        ]
 
-    return license_id
+    return license_ids
 
 
 def read_hub(hub_id: str, revision: str, fetch: bool) -> dict:
@@ -248,35 +307,37 @@ def read_hub(hub_id: str, revision: str, fetch: bool) -> dict:
     Returns
     ----------
     result: dict
-        ok (読めたか), license, sha, gated, error (読めなかった理由)
+        ok (読めたか), licenses, sha, gated, error (読めなかった理由)
     """
-    # 期限の内の覚えた結果があれば使用
-    key = (hub_id, revision)
+    # 期限の内の覚えた結果があれば使用 (トークンを設定したら読み直す)
+    key = (hub_id, revision, hub_token() is not None)
     now = time.monotonic()
     with CACHE_LOCK:
         cached = CACHE.get(key)
     if cached is not None:
         limit = CACHE_SECONDS if cached[1]["ok"] else FAILURE_CACHE_SECONDS
         if now - cached[0] < limit:
-            return dict(cached[1])
+            result = dict(cached[1])
+            return result
     if not fetch or hub_offline():
-        return {
-            "ok": False, "license": None, "sha": None, "gated": False,
+        result = {
+            "ok": False, "licenses": [], "sha": None, "gated": False,
             "error": "ネットワークを使わない設定"
         }
+        return result
 
     # API から読み, 結果を覚える
     try:
         metadata = fetch_hub_metadata(hub_id, revision)
         sha = metadata.get("sha")
         result = {
-            "ok": True, "license": license_from_metadata(metadata),
+            "ok": True, "licenses": licenses_from_metadata(metadata),
             "sha": sha if isinstance(sha, str) else None,
             "gated": bool(metadata.get("gated")), "error": ""
         }
     except HubError as error:
         result = {
-            "ok": False, "license": None, "sha": None, "gated": False,
+            "ok": False, "licenses": [], "sha": None, "gated": False,
             "error": str(error)
         }
     with CACHE_LOCK:
@@ -324,7 +385,7 @@ def loads_weights(spec: UnitSpec, params: dict) -> bool:
     loads = False
     for name, offline in spec.offline.items():
         value = values.get(name)
-        if value != offline and value is not None and value is not False:
+        if value != offline and value not in (None, False, ""):
             loads = True
 
     return loads
@@ -356,7 +417,8 @@ def make_info(
     info = {
         "library": library, "model": model, "hub_id": hub_id,
         "revision": revision, "pinned_revision": None, "license": None,
-        "status": "unknown", "redistributable": False, "gated": False,
+        "licenses": [], "confirmed": False, "status": "unknown",
+        "redistributable": False, "gated": False,
         "alert": True, "message": "", "source": "",
         "url": f"{hub_endpoint()}/{hub_id}" if hub_id else None
     }
@@ -380,11 +442,22 @@ def fill_from_hub(info: dict, fetch: bool) -> bool:
     ok: bool
         読めた場合は True, 読めなかった場合は False (source に理由)
     """
+    # 置き場の名前の形でないものは読まない (API の別の道を読まないため)
+    if not valid_hub_id(info["hub_id"]):
+        info["source"] = (
+            f"読めなかった ({info['hub_id']} は Hugging Face の置き場の名前の"
+            "形でない)"
+        )
+        info["url"] = None
+        return False
+
     # 読めた場合はライセンスと版, 読めなかった場合は理由を記録
     result = read_hub(info["hub_id"], info["revision"] or "main", fetch)
     ok = bool(result["ok"])
     if ok:
-        info["license"] = result["license"]
+        info["licenses"] = list(result["licenses"])
+        info["license"] = ", ".join(info["licenses"]) or None
+        info["confirmed"] = True
         info["pinned_revision"] = result["sha"]
         info["gated"] = result["gated"]
         info["source"] = (
@@ -441,12 +514,14 @@ def timm_info(model_name: str, fetch: bool) -> dict:
     info: dict
         ライセンスの情報
     """
-    # 設定の Hugging Face の置き場を先に読み, 読めなければ設定の license
+    # 設定の Hugging Face の置き場 (@ の後ろは版) を先に読み, 読めなければ
+    # 設定の license を参考に表示 (配布元で確かめていないので分からないもの)
     config = timm_config(model_name)
     hub_id = getattr(config, "hf_hub_id", None) or None
-    info = make_info(
-        "timm", model_name, hub_id, "main" if hub_id else None
-    )
+    revision = "main" if hub_id else None
+    if hub_id and "@" in hub_id:
+        hub_id, revision = hub_id.split("@", 1)
+    info = make_info("timm", model_name, hub_id, revision)
     if config is None:
         info["source"] = (
             "読めなかった (timm が無いか, timm の知らないモデルの名前)"
@@ -458,7 +533,7 @@ def timm_info(model_name: str, fetch: bool) -> dict:
     if license_id:
         info["license"] = license_id
         info["source"] = (
-            "timm のモデルの設定から読んだ"
+            "timm のモデルの設定から読んだ (配布元の説明では確かめていない)"
             + (f". {info['source']}" if info["source"] else "")
         )
     elif not info["source"]:
@@ -569,8 +644,7 @@ def library_info(spec: UnitSpec, params: dict) -> dict:
     names = [
         str(params[key]) for key in ("name", "weights") if params.get(key)
     ]
-    library = "torchvision" if spec.source == "torchvision" else spec.source
-    info = make_info(library, " ".join(names) or spec.name)
+    info = make_info(spec.source, " ".join(names) or spec.name)
     info["source"] = (
         f"読めなかった ({spec.source} の重みには機械で読めるライセンスの"
         "情報が無い. 配布元のページで確かめる)"
@@ -586,16 +660,17 @@ def finish_info(info: dict) -> dict:
     Parameters
     ----------
     info: dict
-        license, gated, source を持つ情報 (書き換える)
+        licenses, confirmed, gated, source を持つ情報 (書き換える)
 
     Returns
     ----------
     info: dict
         status, redistributable, alert, message を埋めた情報
     """
-    # 申請制の重みはライセンスに依らず分からないもの
-    status = classify_license(info["license"])
-    if info["gated"]:
+    # 複数のライセンスは最も厳しいもの. 配布元の説明で確かめていないもの
+    # (読めなかった) と申請制の重みは, ライセンスに依らず分からないもの
+    status = classify_licenses(info["licenses"])
+    if not info["confirmed"] or info["gated"]:
         status = "unknown"
     info["status"] = status
     info["redistributable"] = status == "commercial"
@@ -608,6 +683,8 @@ def finish_info(info: dict) -> dict:
         message += ". 申請制の重み (配布元のページで条件を確かめる)"
     elif status == "noncommercial":
         message += ". 研究や評価だけに使い, 商用の製品には使わない"
+    elif not info["confirmed"]:
+        message += ". 配布元の説明を読めなかったので, 配布元のページで確かめる"
     elif status == "unknown" and info["license"]:
         message += ". 独自の条件か制限つきなので, 配布元の条件を原文で確かめる"
     elif status == "unknown":
@@ -638,11 +715,14 @@ def pretrained_info(
     Returns
     ----------
     info: Optional[dict]
-        ライセンスの情報 (library, model, hub_id, revision,
-        pinned_revision, license, status, redistributable, gated, alert,
-        message, source, url), 重みを読まない場合は None
+        ライセンスの情報 (unit, library, model, hub_id, revision,
+        pinned_revision, license, licenses, confirmed, status,
+        redistributable, gated, alert, message, source, url), 重みを
+        読まない場合は None
     """
     # 重みを読まない部品と引数の値では情報なし
+    if params is not None and not isinstance(params, dict):
+        raise TypeError("params は引数の名前と値の辞書にしてください")
     spec = get_unit(unit)
     values = {param.name: param.default for param in spec.params}
     values.update(params or {})
