@@ -125,7 +125,7 @@ nodes:
 
 ## 登録簿
 
-部品ごとに, 名前, 分類, 出どころ, 説明, 引数 (型, 既定値, 必須か, 説明, 範囲, 選択肢, 候補), 入力と出力の口, 呼び出すときの設定の値 (`forward_params`), 一覧に無い引数も受け取るか (`extra_params`), 使えるかどうか (使えない場合は理由) を持つ. `describe_units()` はこれを JSON にできる辞書 (`name`, `category`, `source`, `description`, `params`, `inputs`, `outputs`, `forward_params`, `extra_params`, `available`, `reason`) のリストで, 名前の順に返す.
+部品ごとに, 名前, 分類, 出どころ, 説明, 引数 (型, 既定値, 必須か, 説明, 範囲, 選択肢, 候補), 入力と出力の口, 呼び出すときの設定の値 (`forward_params`), 一覧に無い引数も受け取るか (`extra_params`), 使えるかどうか (使えない場合は理由), 学習済みの重みを読む引数 (`weights_params`) を持つ. `describe_units()` はこれを JSON にできる辞書 (`name`, `category`, `source`, `description`, `params`, `inputs`, `outputs`, `forward_params`, `extra_params`, `available`, `reason`, `weights_params`) のリストで, 名前の順に返す.
 
 | 出どころ | 名前の形 | 中身 |
 | --- | --- | --- |
@@ -177,6 +177,26 @@ nodes:
 - 書き出すコードでは, ライブラリのモジュールを別名 (`from torchvision import ops as tv_ops` など) で読み込み, 違うライブラリの同じ名前のクラスが重ならないようにする
 - 学習済みの重みを読む引数 (`pretrained`, `weights`, `encoder_weights` など) を部品ごとに持ち (`offline`), 形の推定ではその引数を「読まない」値に置き換える (`tv.Model` は `weights` と, 検出と領域分割のモデルの `weights_backbone`) (形は重みに依らず, 大きな重みの取得を避けるため). 組み立て (`build_model`) では書いた値のまま使う
 - Hugging Face のモデルを名前で読む場合はネットワークを使う (形の推定でも設定の取得に使う). 確認では使わない
+- 学習済みの重みを読む部品の一覧: `describe_units()` の部品ごとの `weights_params` (重みを読む引数の名前のリスト. `offline` のキー. 重みを読まない部品は空). GUI は, これが空でない部品にだけライセンスの欄を出す
+
+### 学習済みの重みのライセンス (2026-11-19)
+
+学習済みの重みを読むノードについて, 重みのライセンスを配布元の情報から自動で読み, 商用で使えるかを分けて, 使えないものと分からないものを警告する (ML_tester の決めたこと 10). 同じ情報で, 推論の一式に重みを写せるか (`redistributable`) と, 読んだ重みの版 (`pinned_revision`) も返す (決めたこと 11. 推論の段階はまだ使わない).
+
+- 入口: `pretrained_info(unit, params, fetch=True)`. ノードの部品の名前と引数の値 (書いていない引数は既定値) から, 重みを読む場合は情報の辞書を, 読まない場合 (`pretrained: false`, `weights` が空など. 既定値を含めて `offline` の値と同じか, `null`, `false`, 空の文字) は `None` を返す. 登録簿に無い部品の名前は `KeyError`, 辞書でない `params` は `TypeError`. 確認 (`validate`) と形の推定 (`infer`) には入れない (ネットワークを使うので, 画面がノードを選んだときなどに別に呼ぶ)
+- 返す辞書: `unit` (部品の名前), `library` (`huggingface`, `timm`, `torchvision`, `smp`, それ以外は部品の出どころ), `model` (書いたモデルの名前), `hub_id` (Hugging Face の置き場の名前. 分からなければ `None`), `revision` (求めた版), `pinned_revision` (Hugging Face が返したコミットの識別子. 読めなければ `None`), `license` (読んだライセンスの識別子. 複数ならカンマで並べる. 読めなければ `None`), `licenses` (識別子のリスト), `confirmed` (配布元の説明から読めたか), `status` (`commercial`, `noncommercial`, `unknown`), `redistributable` (真偽値), `gated` (申請制か), `alert` (警告するか. `status` が `commercial` でなければ真), `message` (画面にそのまま出す説明), `source` (どこから読んだか, 読めなかったか. 画面は `message` と並べて必ず出す), `url` (配布元のページ. 無ければ `None`)
+- 配布元の情報の読み方 (部品ごと)
+    - Hugging Face (`hf.*`): `model_name` を置き場の名前とし (`組織/名前` か `名前` の形で `..` を含まないものだけ. それ以外と, 版が `.` か `..` のものは読まずに `unknown`. 手元のディレクトリと同じ文にし, サーバーにディレクトリがあるかを文で分からせない. API の別の道をトークン付きで読まないため), Hugging Face の API (`/api/models/<名前>/revision/<版>`) のモデルの説明 (`cardData.license`. 無ければ `license:` のタグ) と, コミットの識別子 (`sha`), 申請制か (`gated`) を読む. `model_name` が手元のディレクトリの場合は配布元が分からないので `unknown`
+    - timm (`timm.Model`, `pretrained: true`): timm のモデルの設定 (`pretrained_cfg`) の `hf_hub_id` を置き場の名前として Hugging Face から読む. 引数の `pretrained_cfg` が重みの名前の文字なら, timm と同じくモデルの名前の重みの名前 (`resnet50.a1_in1k` の `a1_in1k`) の代わりに使う. 辞書なら出どころを確かめられないので `unknown`. Hugging Face を読めない場合と置き場の名前の無いモデルは, timm の設定の `license` を参考に見せるが, 配布元の説明で確かめていないので `unknown` にする (どこから読んだかにそう書く)
+    - segmentation_models_pytorch (`smp.*`, `encoder_weights` が空でない): ライブラリが符号化器と重みごとに持つ置き場の名前と版 (`repo_id`, `revision`) から Hugging Face を読む. timm の符号化器 (`tu-` の頭) は timm と同じ
+    - 読む重みを名前と版以外で変える引数 (`pretrained_cfg_overlay`, `checkpoint_path`, `pretrained_url`, `weights_url`, `pretrained_path`. どの部品でも) が空でなければ, 配布元の情報と読む重みが合うか分からないので `confirmed` を偽にし (`unknown`), `source` に理由を足す. Hugging Face の部品は一覧に無い引数を受け取らず, 重みを変えるのは `model_name` と `revision` だけ (どちらも読む先に使う). segmentation_models_pytorch は `encoder_name` と `encoder_weights` を読む先に使う
+    - torchvision (`tv.Model`): 重みに機械で読めるライセンスの情報が無いので `unknown` (「読めなかった」). 他のライブラリ (MONAI など) も同じ
+- 分け方: ライセンスの識別子 (Hugging Face の書き方. 小文字) の小さな表をコードに持つ. 商用で使えるもの (`apache-2.0`, `mit`, `bsd-*`, `cc-by-4.0`, `cc0-1.0` など許諾の広いもの), 商用で使えないもの (`cc-by-nc-*` など), 識別子に `noncommercial` か `non-commercial` を含むもの (`fair-noncommercial-research-license` など) も `noncommercial`. それ以外は全て `unknown` (欄が空, `other`, 独自の条件 (`llama*`, `gemma` など), 利用の制限つき (`openrail*`), 条件の確かめが要るもの (GPL, `cc-by-nd`, `cc-by-sa` など)). 申請制の重みと, 配布元の説明を読めなかった重みは `unknown` (ただし `noncommercial` はそのまま. 申請制でも商用で使えないことは確か). ライセンスが複数ある場合は最も厳しいもの (`noncommercial`, `unknown`, `commercial` の順). `commercial` は「配布元がそう書いている」の意味で, 配布元の書いたライセンスが正しいかは確かめない (他の人が上げ直した重みもある). 表に無いものを商用で使えるとは言わない (間違って使える側に倒さないため)
+- 再配布 (`redistributable`): `status` が `commercial` のものだけ真. 非商用のライセンスにも条件つきで再配布を許すものはあるが, 一式を商用で使う場合に備えて写さない側に倒す. 偽のものは, 推論の一式に重みを写さず, 出どころの名前と `pinned_revision` から読む
+- 警告の文は日本語で, どこから読んだかを必ず添える (例: 「Hugging Face のモデルの説明から読んだ (置き場の名前)」「timm のモデルの設定から読んだ (配布元の説明では確かめていない)」「Hugging Face から読めなかった (置き場の名前: ネットワークの誤り)」)
+- トークンと環境変数: 非公開のモデルと申請制のモデルの情報は, 環境変数 `HF_TOKEN` (無ければ `HUGGING_FACE_HUB_TOKEN`) のトークンで読む (transformers と同じ変数なので, 重みの読み込みにも同じものが使われる). トークンは返す辞書と文に入れず, 転送先には渡さない. `HF_ENDPOINT` で Hugging Face の置き場の URL を変えられる (ミラー). API を待つ上限 (10 秒) は, つなぐ, 読むなどのソケットの操作ごとのもので, 全体の上限ではない. `HF_HUB_OFFLINE=1` か `fetch=False` ではネットワークを使わず, 覚えた結果が無ければ「読めなかった (ネットワークを使わない設定)」にする
+- 覚えておく (キャッシュ): Hugging Face の結果をプロセスの中に置き場の URL (`HF_ENDPOINT`), 置き場の名前, 版, トークンの hash ごとに覚え (トークンを変えたら読み直す. トークンそのものは覚えない), 読めた結果は 1 日, 読めなかった結果は 10 分の間は読み直さない (画面がノードを選ぶたびに読みに行かないため. 読めなかった場合は, つながった後に読み直せるように短くする). 覚える数は 512 まで (超えたら古いものから消す. 画面から打ちかけの名前が来ても増え続けないため). `clear_pretrained_cache()` で消す. ファイルには残さない
+- テストはネットワークを使わない (Hugging Face を読む関数を差し替える)
 
 ## 課題の型への広げ方 (2026-11-18 の方針)
 
@@ -184,10 +204,10 @@ nodes:
 
 - 定義とコードの境目: 1 回の順伝播の計算とパラメータの状態 (学習するか, 初期値, どこから読むか) は定義に, 損失, 更新の順, 繰り返しのサンプリング, 外部の仕組みはコードに残す
 - 進め方
-    1. 定義の版を変えずに: 演算 (指数, 定数倍, 分割, L2 正規化, 行列の積, 勾配の切り離し, 正弦波の時刻の埋め込み, 再パラメータ化. 2026-11-18 に済み. `op.Exp`, `op.Scale`, `op.Chunk`, `op.L2Normalize`, `op.MatMul`, `op.Detach`, `op.SinusoidalEmbedding`, `op.Reparameterize`. 出力の口は部品ごとに決まっていて引数では増やせないので, 分割は名前を付けた複数の口ではなく, 等分した何番目かを 1 つ取り出す部品にした), 受け持ちごとの雛形 (2026-11-19 に済み. 同梱の例 `vae`, `gan_generator`, `gan_discriminator`, `diffusion_denoiser`, `contrastive_encoder`, `two_tower_retrieval`, `policy_value`. 定義は 1 回の順伝播だけを持ち, 損失, 更新の順, 雑音の加え方や環境との行き来は学習のスクリプトに残す. そのため, 損失に要る値 (VAE の平均と対数分散など) を出力に出し, 説明に学習の step で行うことを書く. GAN は 2 つの最適化手法で交互に学習するので, 生成器と識別器を別の定義にする. 対照学習は重みの共有を書けない (版 2) ので, 2 通りの拡張をバッチの次元に並べて 1 つの符号化器に通す), 要る出力だけを計算する入口 (2026-11-19 に済み. `GraphModel.compute`. 復号器だけを呼ぶ, 品物の塔だけを呼ぶ. 「確認, 形の推定, 組み立て」の「一部の計算」), まだ: 学習済みのモデルの一覧 (ライセンス, 申請制か, 表示の義務, 大きさ) とトークンを読む環境変数
+    1. 定義の版を変えずに: 演算 (指数, 定数倍, 分割, L2 正規化, 行列の積, 勾配の切り離し, 正弦波の時刻の埋め込み, 再パラメータ化. 2026-11-18 に済み. `op.Exp`, `op.Scale`, `op.Chunk`, `op.L2Normalize`, `op.MatMul`, `op.Detach`, `op.SinusoidalEmbedding`, `op.Reparameterize`. 出力の口は部品ごとに決まっていて引数では増やせないので, 分割は名前を付けた複数の口ではなく, 等分した何番目かを 1 つ取り出す部品にした), 受け持ちごとの雛形 (2026-11-19 に済み. 同梱の例 `vae`, `gan_generator`, `gan_discriminator`, `diffusion_denoiser`, `contrastive_encoder`, `two_tower_retrieval`, `policy_value`. 定義は 1 回の順伝播だけを持ち, 損失, 更新の順, 雑音の加え方や環境との行き来は学習のスクリプトに残す. そのため, 損失に要る値 (VAE の平均と対数分散など) を出力に出し, 説明に学習の step で行うことを書く. GAN は 2 つの最適化手法で交互に学習するので, 生成器と識別器を別の定義にする. 対照学習は重みの共有を書けない (版 2) ので, 2 通りの拡張をバッチの次元に並べて 1 つの符号化器に通す), 要る出力だけを計算する入口 (2026-11-19 に済み. `GraphModel.compute`. 復号器だけを呼ぶ, 品物の塔だけを呼ぶ. 「確認, 形の推定, 組み立て」の「一部の計算」), 学習済みの重みのライセンス (2026-11-19 に済み. 「学習済みの重みのライセンス」. 申請制か, トークンを読む環境変数も. 表示の義務と大きさはまだ)
     2. 定義の版 2: 凍結 (`train: false`), 零初期化, 評価の形 (`eval_mode`), 外部の重み (出どころ, キーの付け替え, 読めた / 形の違う / 新しい / 使わない重みの数の報告), 重みの共有
     3. 研究の自作の部品を, 起動の設定で明示したモジュールから読み込む (任意のコードを読み込むので明示したものだけ)
-- 決めていないこと: 版 2 の範囲 (勧めは 1 回の版上げにまとめる), キーの付け替えの書き方 (番号の付け替えに正規表現が要る), ライセンスの情報の持ち方 (勧めは手で書いた一覧)
+- 決めていないこと: 版 2 の範囲 (勧めは 1 回の版上げにまとめる), キーの付け替えの書き方 (番号の付け替えに正規表現が要る)
 
 ## 段階
 
