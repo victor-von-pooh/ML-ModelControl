@@ -17,7 +17,10 @@ from ml_modelcontrol.registry import REGISTRY
 MODULES_DIR = Path(__file__).parent / "custom_modules"
 
 # 見本のモジュールの名前
-SAMPLE_MODULES = ["lab_units", "lab_hook", "lab_empty", "lab_clash"]
+SAMPLE_MODULES = [
+    "lab_units", "lab_hook", "lab_empty", "lab_clash", "lab_partial",
+    "lab_hook_fail", "lab_overwrite", "never_import"
+]
 
 
 @pytest.fixture
@@ -123,6 +126,8 @@ def test_register_units_from_errors(lab_path: Path) -> None:
         register_units_from(["custom_modules/lab_units.py"])
     with pytest.raises(TypeError, match="リストにしてください"):
         register_units_from("lab_units")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="リストにしてください"):
+        register_units_from({"lab_units": 1})  # type: ignore[arg-type]
 
     # 読み込めないモジュール
     with pytest.raises(ValueError, match="no_such_lab_module を読み込めません"):
@@ -137,6 +142,37 @@ def test_register_units_from_errors(lab_path: Path) -> None:
     with pytest.raises(ValueError, match="lab_clash の部品を登録できません"):
         register_units_from(["lab_clash"])
     assert get_unit("lab.Scale").module == "lab_units"
+    with pytest.raises(ValueError, match="overwrite は書けません"):
+        register_units_from(["lab_overwrite"])
+    assert get_unit("lab.Scale").module == "lab_units"
+
+
+def test_failed_module_is_removed(lab_path: Path) -> None:
+    """
+    途中で止まったモジュールの部品を外し, 同じ誤りで読み直せることを
+    確かめる関数
+
+    Parameters
+    ----------
+    lab_path: Path
+        見本のモジュールの置き場
+
+    Returns
+    ----------
+    None
+    """
+    # UNITS の 2 つ目で止まると, 1 つ目も外し, 2 回目も同じ誤り
+    for _ in range(2):
+        with pytest.raises(ValueError, match=r"lab_partial の UNITS\[1\]"):
+            register_units_from(["lab_partial"])
+        assert "partial.Scale" not in REGISTRY
+
+    # register_units の誤りはモジュールの名前を添え, 登録した部品を外す
+    with pytest.raises(
+        ValueError, match="lab_hook_fail の register_units.*部品の準備に失敗"
+    ):
+        register_units_from(["lab_hook_fail"])
+    assert "hookfail.Scale" not in REGISTRY
 
 
 def test_unknown_unit_is_not_imported(lab_path: Path) -> None:
