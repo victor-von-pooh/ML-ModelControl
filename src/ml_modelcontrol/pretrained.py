@@ -1,3 +1,4 @@
+import hashlib
 import http.client
 import json
 import os
@@ -45,6 +46,25 @@ LICENSE_TABLE = {
 # 表に無い識別子のうち, 頭で商用で使えないと分かるもの (版の違い)
 NONCOMMERCIAL_PREFIXES = ("cc-by-nc",)
 
+# 表に無い識別子のうち, 含む語で商用で使えないと分かるもの
+# (fair-noncommercial-research-license など)
+NONCOMMERCIAL_WORDS = ("noncommercial", "non-commercial")
+
+# 読む重みを名前と版 (と下の timm の pretrained_cfg の名前) 以外で変える
+# 引数. 書いてあれば配布元の情報と読む重みが合うか分からないので unknown
+# (timm の重みの設定の上書きと手元のファイル, MONAI の重みの URL など)
+WEIGHT_OVERRIDE_PARAMS = (
+    "pretrained_cfg_overlay", "checkpoint_path", "pretrained_url",
+    "weights_url", "pretrained_path"
+)
+
+# 手元のパスと, 置き場の名前の形でない名前の説明 (サーバーにディレクトリが
+# あるかを文で分からせないように 1 つにまとめる)
+LOCAL_SOURCE = (
+    "読めなかった (手元のパスか, Hugging Face の置き場の名前の形でない. "
+    "配布元の情報が無い)"
+)
+
 # 分類の厳しさの順 (複数のライセンスを持つ重みは最も厳しいもの)
 STATUS_ORDER = ("commercial", "unknown", "noncommercial")
 
@@ -67,12 +87,13 @@ FAILURE_CACHE_SECONDS = 10 * 60
 # 超えたら古いものから消す)
 CACHE_LIMIT = 512
 
-# Hugging Face の API を待つ秒数
+# Hugging Face の API を待つ秒数 (つなぐ, 読むなどのソケットの操作ごとの
+# 上限で, 全体の上限ではない)
 FETCH_TIMEOUT = 10.0
 
-# 置き場の名前, 版, トークンの有無ごとの Hugging Face の結果
-# (読んだ時刻, 結果)
-CACHE: dict[tuple[str, str, bool], tuple[float, dict]] = {}
+# 置き場の URL, 置き場の名前, 版, トークンの hash ごとの Hugging Face の
+# 結果 (読んだ時刻, 結果)
+CACHE: dict[tuple[str, str, str, str], tuple[float, dict]] = {}
 CACHE_LOCK = threading.Lock()
 
 
@@ -98,7 +119,10 @@ def classify_license(license_id: Optional[str]) -> str:
     # 表と頭で分け, それ以外は分からないもの
     key = (license_id or "").strip().lower()
     status = LICENSE_TABLE.get(key, "unknown")
-    if status == "unknown" and key.startswith(NONCOMMERCIAL_PREFIXES):
+    if status == "unknown" and (
+        key.startswith(NONCOMMERCIAL_PREFIXES)
+        or any(word in key for word in NONCOMMERCIAL_WORDS)
+    ):
         status = "noncommercial"
 
     return status
@@ -313,8 +337,13 @@ def read_hub(hub_id: str, revision: str, fetch: bool) -> dict:
     result: dict
         ok (読めたか), licenses, sha, gated, error (読めなかった理由)
     """
-    # 期限の内の覚えた結果があれば使用 (トークンを設定したら読み直す)
-    key = (hub_id, revision, hub_token() is not None)
+    # 期限の内の覚えた結果があれば使用 (置き場の URL かトークンを変えたら
+    # 読み直す. トークンそのものは覚えず hash だけ)
+    token = hub_token()
+    token_hash = (
+        hashlib.sha256(token.encode("utf-8")).hexdigest() if token else ""
+    )
+    key = (hub_endpoint(), hub_id, revision, token_hash)
     now = time.monotonic()
     with CACHE_LOCK:
         cached = CACHE.get(key)
@@ -453,10 +482,7 @@ def fill_from_hub(info: dict, fetch: bool) -> bool:
     # 読まないため)
     revision = info["revision"] or "main"
     if not valid_hub_id(info["hub_id"]) or revision in (".", ".."):
-        info["source"] = (
-            f"読めなかった ({info['hub_id']} は Hugging Face の置き場の名前の"
-            "形でない)"
-        )
+        info["source"] = LOCAL_SOURCE
         info["url"] = None
         return False
 
@@ -507,22 +533,41 @@ def timm_config(model_name: str) -> Any:
     return config
 
 
-def timm_info(model_name: str, fetch: bool) -> dict:
+def timm_info(
+    model_name: str, fetch: bool, pretrained_cfg: Any = None
+) -> dict:
     """
     timm のモデルの重みのライセンスの情報を作る関数
 
     Parameters
     ----------
     model_name: str
-        timm のモデルの名前
+        timm のモデルの名前 (resnet50.a1_in1k のように重みの名前も可)
     fetch: bool
         ネットワークを使うか
+    pretrained_cfg: Any = None
+        timm の pretrained_cfg の引数 (重みの名前の文字なら, timm と同じく
+        モデルの名前の重みの名前の代わりに使う. 辞書は確かめられない)
 
     Returns
     ----------
     info: dict
         ライセンスの情報
     """
+    # 重みの設定を辞書で渡した場合は, 出どころを確かめられない
+    if pretrained_cfg and not isinstance(pretrained_cfg, str):
+        info = make_info("timm", model_name)
+        info["source"] = (
+            "読めなかった (pretrained_cfg を辞書で書いていて, 読む重みの"
+            "出どころを確かめられない)"
+        )
+        return info
+
+    # timm と同じく, pretrained_cfg の名前をモデルの名前の重みの名前に
+    # 置き換え (resnet50.a1_in1k と pretrained_cfg: x は resnet50.x)
+    if pretrained_cfg:
+        model_name = f"{model_name.split('.', 1)[0]}.{pretrained_cfg}"
+
     # 設定の Hugging Face の置き場 (@ の後ろは版) を先に読み, 読めなければ
     # 設定の license を参考に表示 (配布元で確かめていないので分からないもの)
     config = timm_config(model_name)
@@ -617,14 +662,14 @@ def huggingface_info(params: dict, fetch: bool) -> dict:
     info: dict
         ライセンスの情報
     """
-    # 手元のディレクトリは配布元が分からないので読まない
+    # 手元のディレクトリは配布元が分からないので読まない (置き場の名前の
+    # 形でない名前と同じ文)
     model_name = str(params.get("model_name") or "")
     revision = str(params.get("revision") or "main")
     if not model_name or os.path.isdir(model_name):
         info = make_info("huggingface", model_name)
         info["source"] = (
-            "読めなかった (手元のファイルで, 配布元の情報が無い)"
-            if model_name else "読めなかった (モデルの名前が空)"
+            LOCAL_SOURCE if model_name else "読めなかった (モデルの名前が空)"
         )
         return info
     info = make_info("huggingface", model_name, model_name, revision)
@@ -662,6 +707,38 @@ def library_info(spec: UnitSpec, params: dict) -> dict:
     return info
 
 
+def check_overrides(info: dict, params: dict) -> dict:
+    """
+    読む重みを名前と版以外で変える引数がある場合に, 確かめていないものに
+    する関数
+
+    Parameters
+    ----------
+    info: dict
+        ライセンスの情報 (書き換える)
+    params: dict
+        ノードの引数の値
+
+    Returns
+    ----------
+    info: dict
+        上書きの引数があれば confirmed を偽にし, source に理由を足した情報
+    """
+    # 空でない上書きの引数の名前を並べて理由に追加
+    names = [
+        name for name in WEIGHT_OVERRIDE_PARAMS
+        if params.get(name) not in (None, False, "", {}, [])
+    ]
+    if names:
+        info["confirmed"] = False
+        info["source"] = (
+            f"{info['source']}. ただし {', '.join(names)} で読む重みを変えて"
+            "いるので, 配布元の情報と合うか分からない"
+        )
+
+    return info
+
+
 def finish_info(info: dict) -> dict:
     """
     読んだライセンスから分類, 再配布, 警告と説明を埋める関数
@@ -679,7 +756,7 @@ def finish_info(info: dict) -> dict:
     # 複数のライセンスは最も厳しいもの. 配布元の説明で確かめていないもの
     # (読めなかった) と申請制の重みは, ライセンスに依らず分からないもの
     status = classify_licenses(info["licenses"])
-    if not info["confirmed"] or info["gated"]:
+    if status != "noncommercial" and (not info["confirmed"] or info["gated"]):
         status = "unknown"
     info["status"] = status
     info["redistributable"] = status == "commercial"
@@ -688,12 +765,18 @@ def finish_info(info: dict) -> dict:
     # 画面にそのまま出す説明 (ライセンス, 分類, 次の一手)
     license_text = info["license"] or "不明"
     message = f"ライセンス: {license_text} ({STATUS_TEXT[status]})"
-    if info["gated"]:
+    if info["gated"] and status == "noncommercial":
+        message += (
+            ". 申請制の重みで, 研究や評価だけに使い, 商用の製品には使わない"
+        )
+    elif info["gated"]:
         message += ". 申請制の重み (配布元のページで条件を確かめる)"
     elif status == "noncommercial":
         message += ". 研究や評価だけに使い, 商用の製品には使わない"
     elif not info["confirmed"]:
-        message += ". 配布元の説明を読めなかったので, 配布元のページで確かめる"
+        message += (
+            ". 配布元の説明で確かめられなかったので, 配布元のページで確かめる"
+        )
     elif status == "unknown" and info["license"]:
         message += ". 独自の条件か制限つきなので, 配布元の条件を原文で確かめる"
     elif status == "unknown":
@@ -742,13 +825,17 @@ def pretrained_info(
     if spec.source == "transformers":
         info = huggingface_info(values, fetch)
     elif spec.name == "timm.Model":
-        info = timm_info(str(values.get("model_name") or ""), fetch)
+        info = timm_info(
+            str(values.get("model_name") or ""), fetch,
+            values.get("pretrained_cfg")
+        )
     elif spec.source == "segmentation_models_pytorch" and (
         values.get("encoder_weights") is not None
     ):
         info = smp_info(values, fetch)
     else:
         info = library_info(spec, values)
+    info = check_overrides(info, values)
     info["unit"] = unit
     info = finish_info(info)
 

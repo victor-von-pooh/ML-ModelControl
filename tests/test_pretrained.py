@@ -38,7 +38,11 @@ HUB = {
         "sha": "3" * 40,
         "cardData": {"license": ["apache-2.0", "cc-by-nc-4.0"]}
     },
-    "org/bad-tags": {"sha": "4" * 40, "tags": 3}
+    "org/bad-tags": {"sha": "4" * 40, "tags": 3},
+    "org/gated-nc": {
+        "sha": "5" * 40, "gated": "auto",
+        "cardData": {"license": "cc-by-nc-4.0"}
+    }
 }
 
 
@@ -200,7 +204,10 @@ def test_classify_license() -> None:
     for license_id in ("apache-2.0", "MIT", "bsd-3-clause", "cc-by-4.0",
                        "cc0-1.0"):
         assert classify_license(license_id) == "commercial"
-    for license_id in ("cc-by-nc-4.0", "cc-by-nc-sa-4.0", "cc-by-nc-1.0"):
+    for license_id in (
+        "cc-by-nc-4.0", "cc-by-nc-sa-4.0", "cc-by-nc-1.0",
+        "fair-noncommercial-research-license", "x-non-commercial"
+    ):
         assert classify_license(license_id) == "noncommercial"
     for license_id in (
         "other", "llama3.1", "openrail", "creativeml-openrail-m", "gpl-3.0",
@@ -257,6 +264,8 @@ def test_huggingface_alerts() -> None:
     assert "商用で使えない" in info["message"]
 
     # 申請制と独自の条件, 制限つき, 空は分からないもの
+    gated_nc = hf_info("org/gated-nc")
+    assert gated_nc["status"] == "noncommercial" and gated_nc["gated"]
     gated = hf_info("org/gated")
     assert gated["status"] == "unknown" and gated["gated"] is True
     assert "申請制" in gated["message"]
@@ -364,7 +373,13 @@ def test_unreadable_and_cache(
     # 上限を超えたら古いものから消す
     monkeypatch.setattr(pretrained, "CACHE_LIMIT", 1)
     hf_info("org/list")
-    assert list(pretrained.CACHE) == [("org/list", "main", False)]
+    assert [key[1:3] for key in pretrained.CACHE] == [("org/list", "main")]
+
+    # 置き場の URL を変えたら読み直す
+    monkeypatch.setattr(pretrained, "CACHE_LIMIT", 512)
+    monkeypatch.setenv("HF_ENDPOINT", "https://mirror.example")
+    hf_info("org/list")
+    assert fake_hub.calls.count(("org/list", "main")) == 2
 
 
 def test_offline(fake_hub: FakeHub, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -425,7 +440,8 @@ def test_no_weights_and_local(
     assert pretrained_info("nn.Linear", {"in_features": 2}) is None
     info = hf_info(str(tmp_path))
     assert info["status"] == "unknown"
-    assert "手元のファイル" in info["source"]
+    assert info["source"] == pretrained.LOCAL_SOURCE
+    assert hf_info("../no/such/dir")["source"] == pretrained.LOCAL_SOURCE
     assert fake_hub.calls == []
     with pytest.raises(KeyError):
         pretrained_info("nn.NoSuchUnit", {})
@@ -605,3 +621,74 @@ def test_smp(fake_hub: FakeHub) -> None:
     assert info["hub_id"] == setting["repo_id"]
     assert fake_hub.calls == [(setting["repo_id"], setting["revision"])]
     assert pretrained_info("smp.Unet", {"encoder_weights": None}) is None
+
+
+def test_timm_pretrained_cfg(fake_hub: FakeHub) -> None:
+    """
+    timm の pretrained_cfg の名前で重みを選び, 辞書と上書きの引数は確かめ
+    られないものにすることを確かめる関数
+
+    Parameters
+    ----------
+    fake_hub: FakeHub
+        差し替えた Hugging Face を読む関数
+
+    Returns
+    ----------
+    None
+    """
+    timm_models = pytest.importorskip("timm.models")
+    expected = timm_models.get_pretrained_cfg("resnet50.fb_swsl_ig1b_ft_in1k")
+
+    # 名前の pretrained_cfg は, モデルの名前の重みの名前の代わり
+    for name in ("resnet50", "resnet50.a1_in1k"):
+        info = pretrained_info("timm.Model", {
+            "model_name": name, "pretrained": True,
+            "pretrained_cfg": "fb_swsl_ig1b_ft_in1k"
+        })
+        assert info is not None
+        assert info["hub_id"] == expected.hf_hub_id
+        assert info["license"] == expected.license
+        assert info["alert"] is True
+
+    # 辞書の pretrained_cfg と重みの上書きは確かめられない
+    info = pretrained_info("timm.Model", {
+        "model_name": "resnet50", "pretrained": True,
+        "pretrained_cfg": {"hf_hub_id": "org/apache"}
+    })
+    assert info is not None and info["status"] == "unknown"
+    assert "pretrained_cfg" in info["source"]
+    assert ("org/apache", "main") not in fake_hub.calls
+
+    # 重みの設定の上書きは, 読めたライセンスに依らず確かめていないもの
+    info = pretrained_info("timm.Model", {
+        "model_name": "resnet50", "pretrained": True,
+        "pretrained_cfg_overlay": {"hf_hub_id": "org/apache"}
+    })
+    assert info is not None and info["confirmed"] is False
+    assert "pretrained_cfg_overlay" in info["source"]
+
+
+def test_override_params() -> None:
+    """
+    読む重みを変える引数があると, 商用で使えるライセンスでも警告すること
+    を確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    info = pretrained.check_overrides(
+        {"confirmed": True, "source": "読んだ"},
+        {"pretrained_cfg_overlay": {"hf_hub_id": "x/y"}}
+    )
+    assert info["confirmed"] is False
+    assert "pretrained_cfg_overlay" in info["source"]
+    unchanged = pretrained.check_overrides(
+        {"confirmed": True, "source": "読んだ"}, {"checkpoint_path": ""}
+    )
+    assert unchanged["confirmed"] is True
