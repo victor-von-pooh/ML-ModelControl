@@ -556,13 +556,15 @@ def describe_units() -> list[dict]:
     Returns
     ----------
     units: list[dict]
-        名前の順の部品ごとの辞書 (作る関数は除く)
+        名前の順の部品ごとの辞書 (作る関数は除く. 学習済みの重みを読む
+        引数の名前 weights_params を含む)
     """
-    # 組み込みの部品を読み込み, 作る関数を除いて辞書に変換
+    # 組み込みの部品を読み込み, 作る関数を除き重みを読む引数を付けて変換
     ensure_loaded()
     units = []
     for name in sorted(REGISTRY):
         data = asdict(REGISTRY[name])
+        data["weights_params"] = sorted(REGISTRY[name].offline)
         for key in (
             "builder", "checker", "code_name", "code_import", "code_args",
             "offline"
