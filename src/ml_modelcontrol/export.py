@@ -394,7 +394,138 @@ def class_code(
             build_args(spec, analysis, name), "),", "            "
         )
     lines.append("        })")
+    lines += state_code(spec, analysis)
     lines += forward_code(spec, analysis)
+    lines += train_code(spec, analysis, class_name)
+
+    return lines
+
+
+def state_code(spec: dict, analysis: Any) -> list[str]:
+    """
+    パラメータの状態 (版 2 の項目) を設定する __init__ の行を作る関数
+
+    外部の重みはコードに書かず, コメントと注意にする
+
+    Parameters
+    ----------
+    spec: dict
+        モデルの定義
+    analysis: Any
+        定義の解析の結果
+
+    Returns
+    ----------
+    lines: list[str]
+        零初期化, 凍結, 共有, 評価の形の行 (無ければ空)
+    """
+    # 外部の重み (コメントと注意), 零初期化, 凍結の行 (組み立てと同じ順)
+    nodes = spec["nodes"]
+    body: list[str] = []
+    for name in analysis.order:
+        node = nodes[name]
+        module = f"self.nodes[{name!r}]"
+        if "weights" in node:
+            body.append(
+                f"        # ノード {name} の外部の重みは読み込みの対象外"
+            )
+            body.append(
+                "        # (build_model で組み立てたモデルの state_dict を "
+                "load_state_dict で読み込み)"
+            )
+            warnings.warn(
+                f"ノード {name} の外部の重み (weights) は書き出すコードでは"
+                "読みません. ML-ModelControl の build_model で組み立てた"
+                "モデルの state_dict を保存し, 書き出したクラスの "
+                "load_state_dict で読み込んでください",
+                stacklevel=4
+            )
+        zero = node.get("zero_init")
+        if zero is True:
+            body += [
+                f"        for parameter in {module}.parameters():",
+                "            nn.init.zeros_(parameter)"
+            ]
+        elif isinstance(zero, list):
+            body += [
+                f"        nn.init.zeros_({module}.get_parameter({item!r}))"
+                for item in zero
+            ]
+        if node.get("train") is False:
+            body += [
+                f"        for parameter in {module}.parameters():",
+                "            parameter.requires_grad_(False)"
+            ]
+
+    # 共有の行 (ノード全体は部品, パラメータごとは属性の置き換え)
+    for name in analysis.order:
+        share = nodes[name].get("share")
+        if isinstance(share, str):
+            body.append(
+                f"        self.nodes[{name!r}] = self.nodes[{share!r}]"
+            )
+        elif isinstance(share, dict):
+            for own, ref in share.items():
+                source, _, source_name = str(ref).partition(".")
+                owner, _, leaf = str(own).rpartition(".")
+                body += [
+                    "        setattr(",
+                    f"            self.nodes[{name!r}].get_submodule("
+                    f"{owner!r}), {leaf!r},",
+                    f"            self.nodes[{source!r}].get_parameter("
+                    f"{source_name!r})",
+                    "        )"
+                ]
+
+    # 評価の形に保つノード
+    eval_nodes = [
+        name for name in analysis.order
+        if nodes[name].get("eval_mode") is True
+    ]
+    if eval_nodes:
+        body += [
+            f"        self.eval_nodes = {eval_nodes!r}",
+            "        self.train(self.training)"
+        ]
+    lines = ["", "        # パラメータの状態の設定", *body] if body else []
+
+    return lines
+
+
+def train_code(spec: dict, analysis: Any, class_name: str) -> list[str]:
+    """
+    評価の形に保つノードがある場合の train の行を作る関数
+
+    Parameters
+    ----------
+    spec: dict
+        モデルの定義
+    analysis: Any
+        定義の解析の結果
+    class_name: str
+        クラスの名前
+
+    Returns
+    ----------
+    lines: list[str]
+        train の定義の行 (評価の形に保つノードが無ければ空)
+    """
+    # eval_mode のノードがある場合だけ, 全体の切り替えの後に戻す
+    if not any(
+        spec["nodes"][name].get("eval_mode") is True
+        for name in analysis.order
+    ):
+        lines: list[str] = []
+        return lines
+    lines = [
+        "", "    def train(self, mode=True):",
+        "        # 全体の切り替えと, 評価の形に保つノードの戻し",
+        f"        super({class_name}, self).train(mode)",
+        "        for name in self.eval_nodes:",
+        "            self.nodes[name].train(False)",
+        "        model = self", "",
+        "        return model"
+    ]
 
     return lines
 

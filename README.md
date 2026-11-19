@@ -123,6 +123,16 @@ dump_spec(spec, "model_with_block.yaml")  # 写した定義を別の名前で保
 
 部分モデルの出力が 1 つなら, 使うノードはノードの名前だけでつなぎ先にできる. 2 つ以上なら「ノードの名前:出力の名前」で選ぶ.
 
+学習済みのモデルを部品にして新しい層だけを学ぶ形は, 定義の版 2 (`format_version: 2`) でノードに書く. `train: false` (凍結. 部分モデルのノードなら中の全て), `eval_mode: true` (BatchNorm の統計と Dropout も評価の形のまま. 凍結とは別に選ぶ), `zero_init: true` か `[weight]` (0 で始める. 足した枝の最後の層), `weights` (外部の重みの一部の読み込み. `path`, `hub` と `file`, `unit` と `params` のどれかから読み, `remap` で `{from: "model.blocks.", to: "nodes."}` のように前置きを付け替える. 番号をずらす場合だけ `{pattern: ..., to: ..., offset: -6}` の正規表現. `strict` は既定で真), `share` (ノードの名前でノード全体, `{weight: embed.weight}` でパラメータごとに同じパラメータを使う). `build_model` は外部の重みを読み, 読めた / 形の違う / 新しい / 使わない重みの数を `model.weights_report` に返す (Hugging Face と学習済みの部品から読んだ場合はライセンスも). 学習した重みを後から `load_state_dict` で読む場合は `build_model(..., load_weights=False)`. 読む重みのファイルは, 定義のディレクトリ (か `base_dir`) と環境変数 `ML_MODELCONTROL_WEIGHTS_DIRS` のディレクトリの中のものだけで, 大きさの上限は既定 4 GiB (`ML_MODELCONTROL_WEIGHTS_MAX_BYTES`). `torch.load` は `weights_only=True` で読む (PyTorch 2.6 以上). 版 2 の項目を使わない定義は `dump_spec` が版 1 のまま書く. 書き方は [docs/DESIGN.md](docs/DESIGN.md) の「パラメータの状態」.
+
+```yaml
+format_version: 2
+nodes:
+  backbone: {unit: sub.encoder, inputs: x, train: false, eval_mode: true,
+             weights: {path: base.pt, remap: [{from: "model.", to: "nodes."}], strict: false}}
+  head: {unit: nn.Linear, params: {in_features: 16, out_features: 3}, inputs: backbone, zero_init: true}
+```
+
 自作の部品は `register_unit(MyBlock, name="my.Block")` で登録すると, 定義の `unit` に書ける (`forward` が複数の値を返す場合は `outputs=["a", "b"]` で口の名前を付ける. 属性や辞書のキーで値を返す場合は `outputs={"logits": ["logits"], "last": ["hidden_states", -1]}` のように口ごとの取り出し方を書く. 引数の説明と範囲は `notes={"hidden": {"description": "中間の大きさ", "minimum": 1}}` のように付けられる. 名前の頭に組み込みの部品の頭 (`nn.`, `op.`, `sub.` など) は使えない).
 
 ## ML-Found で学習する

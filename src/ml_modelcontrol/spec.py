@@ -8,7 +8,7 @@ from typing import Any, Optional, Union
 import yaml
 
 # このライブラリが読める定義の版
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
 # 定義の一番上, 入力, ノードで書ける項目
 GRAPH_KEYS = {
@@ -16,8 +16,11 @@ GRAPH_KEYS = {
     "subgraphs", "ui"
 }
 INPUT_KEYS = {"shape", "dtype", "fill", "description", "ui"}
+# 版 2 で足したノードの項目 (パラメータの状態)
+STATE_KEYS = ("train", "eval_mode", "zero_init", "weights", "share")
 NODE_KEYS = {
-    "unit", "params", "forward_params", "inputs", "description", "ui"
+    "unit", "params", "forward_params", "inputs", "description", "ui",
+    *STATE_KEYS
 }
 
 
@@ -111,18 +114,86 @@ def migrate(spec: dict) -> dict:
     if version > FORMAT_VERSION:
         raise ValueError(
             f"format_version {version} の定義は, このライブラリ (版 "
-            f"{FORMAT_VERSION} まで) では読めません"
+            f"{FORMAT_VERSION} まで) では読めません. ライブラリを新しく"
+            "してください"
         )
+
+    # 版 1 の定義に版 2 の項目があれば誤り (版を書かない定義も版 1)
+    if version < 2:
+        places = state_places(spec)
+        if places:
+            raise ValueError(
+                f"format_version {version} の定義に版 2 の項目 "
+                f"({', '.join(places[:5])}) があります. format_version: 2 に"
+                "してください"
+            )
     spec["format_version"] = FORMAT_VERSION
 
     return spec
+
+
+def state_places(spec: dict) -> list[str]:
+    """
+    定義の中の版 2 の項目 (パラメータの状態) の場所を返す関数
+
+    Parameters
+    ----------
+    spec: dict
+        モデルの定義 (部分モデルの中も見る)
+
+    Returns
+    ----------
+    places: list[str]
+        nodes.fc.train や subgraphs.block.nodes.fc.share のような場所
+    """
+    # 本体と部分モデルのノードごとに, 版 2 の項目を集約
+    graphs = [("", spec)]
+    subgraphs = spec.get("subgraphs")
+    if isinstance(subgraphs, dict):
+        graphs += [
+            (f"subgraphs.{name}.", sub) for name, sub in subgraphs.items()
+        ]
+    places = []
+    for head, graph in graphs:
+        nodes = graph.get("nodes") if isinstance(graph, dict) else None
+        if not isinstance(nodes, dict):
+            continue
+        for name, node in nodes.items():
+            if not isinstance(node, dict):
+                continue
+            places += [
+                f"{head}nodes.{name}.{key}" for key in STATE_KEYS
+                if key in node
+            ]
+
+    return places
+
+
+def lowest_version(spec: dict) -> int:
+    """
+    定義を書ける最も低い版を返す関数
+
+    Parameters
+    ----------
+    spec: dict
+        モデルの定義
+
+    Returns
+    ----------
+    version: int
+        版 2 の項目を使えば 2, 使わなければ 1
+    """
+    version = 2 if state_places(spec) else 1
+
+    return version
 
 
 def dump_spec(spec: dict, path: Optional[Union[str, Path]] = None) -> str:
     """
     モデルの定義を YAML か JSON の文字にし, パスがあれば保存する関数
 
-    一番上の項目は決まった順に並べ, ノードは書いた順のまま残す
+    一番上の項目は決まった順に並べ, ノードは書いた順のまま残す. 版は
+    書ける最も低い版にする (版 2 の項目を使わなければ 1)
 
     Parameters
     ----------
@@ -136,6 +207,11 @@ def dump_spec(spec: dict, path: Optional[Union[str, Path]] = None) -> str:
     text: str
         保存した文字
     """
+    # 版は書ける最も低い版 (版 2 の項目を使わなければ, 版 1 だけを読む
+    # 古いライブラリでも読めるように 1)
+    spec = dict(spec)
+    spec["format_version"] = lowest_version(spec)
+
     # 一番上の項目とノードの項目の順をそろえ (部分モデルの中も),
     # 拡張子に合わせて書き出し
     ordered = order_graph(spec)
@@ -186,7 +262,8 @@ def order_graph(spec: dict) -> dict:
 
     # ノードの項目の順の整列
     node_order = [
-        "unit", "description", "params", "forward_params", "inputs", "ui"
+        "unit", "description", "params", "forward_params", "inputs",
+        *STATE_KEYS, "ui"
     ]
     if isinstance(ordered.get("nodes"), dict):
         ordered["nodes"] = {
@@ -248,6 +325,8 @@ def embed_subgraph(
         )
     target = load_spec(spec)
     copied = load_spec(source)
+    if not isinstance(source, dict):
+        absolute_weights(copied, Path(source).parent)
     subgraphs = target.get("subgraphs")
     nested = copied.pop("subgraphs", None)
     subgraphs = {} if subgraphs is None else subgraphs
@@ -280,6 +359,41 @@ def embed_subgraph(
     target["subgraphs"] = subgraphs
 
     return target
+
+
+def absolute_weights(spec: dict, base_dir: Path) -> None:
+    """
+    定義の外部の重みの相対のパスを, 元のディレクトリからの絶対のパスに
+    直す関数
+
+    別のディレクトリの定義を写すと, 相対のパスの元 (写し先の定義の
+    ディレクトリ) が変わるため
+
+    Parameters
+    ----------
+    spec: dict
+        モデルの定義 (部分モデルの中も直す. その場で書き換える)
+    base_dir: Path
+        元の定義のファイルのディレクトリ
+
+    Returns
+    ----------
+    None
+    """
+    # 本体と部分モデルのノードの weights.path の書き換え
+    graphs = [spec]
+    subgraphs = spec.get("subgraphs")
+    if isinstance(subgraphs, dict):
+        graphs += list(subgraphs.values())
+    for graph in graphs:
+        nodes = graph.get("nodes") if isinstance(graph, dict) else None
+        for node in (nodes if isinstance(nodes, dict) else {}).values():
+            weights = node.get("weights") if isinstance(node, dict) else None
+            path = weights.get("path") if isinstance(weights, dict) else None
+            if isinstance(path, str) and path and not (
+                Path(path).expanduser().is_absolute()
+            ):
+                weights["path"] = str((base_dir / path).resolve())
 
 
 def parse_ref(ref: str) -> tuple[str, Optional[str]]:

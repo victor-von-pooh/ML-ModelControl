@@ -840,3 +840,35 @@ def pretrained_info(
     info = finish_info(info)
 
     return info
+
+
+def hub_weights_info(
+    hub_id: str, revision: str = "main", fetch: bool = True
+) -> dict:
+    """
+    Hugging Face の置き場から読む外部の重みのライセンスの情報を返す関数
+
+    定義の weights の hub に書いた置き場について, pretrained_info と同じ
+    読み方と分け方で情報を作る
+
+    Parameters
+    ----------
+    hub_id: str
+        Hugging Face の置き場の名前
+    revision: str = "main"
+        版
+    fetch: bool = True
+        覚えた結果が無い場合にネットワークを使うか
+
+    Returns
+    ----------
+    info: dict
+        ライセンスの情報 (pretrained_info と同じ形. unit は None)
+    """
+    # 配布元の説明から読み, 分類と説明を付加
+    info = make_info("huggingface", hub_id, hub_id, revision)
+    fill_from_hub(info, fetch)
+    info["unit"] = None
+    info = finish_info(info)
+
+    return info

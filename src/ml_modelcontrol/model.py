@@ -5,6 +5,10 @@ import torch
 from torch import nn
 
 from ml_modelcontrol.spec import load_spec, parse_ref
+from ml_modelcontrol.state import (
+    LOAD_CONTEXT, load_node_weights, make_context, share_targets,
+    tie_parameter, zero_parameters
+)
 from ml_modelcontrol.validate import Analysis, analyze
 
 
@@ -154,6 +158,142 @@ class GraphModel(nn.Module):
             }
             for name in self.order
         }
+
+        # パラメータの状態 (版 2. 外部の重み, 零初期化, 凍結, 共有, 評価の
+        # 形) の適用
+        self.eval_nodes: list[str] = []
+        self.weights_report: list[dict] = []
+        self.apply_state(spec["nodes"])
+
+    def apply_state(self, nodes: dict) -> None:
+        """
+        ノードのパラメータの状態 (版 2 の項目) を適用する関数
+
+        外部の重み, 零初期化, 凍結, 共有, 評価の形の順に行う
+
+        Parameters
+        ----------
+        nodes: dict
+            定義のノード
+
+        Returns
+        ----------
+        None
+
+        Raises
+        ----------
+        NodeBuildError
+            外部の重みを読めない場合, パラメータの名前が無い場合, 共有の
+            形が違う場合
+        """
+        # ノードごとの外部の重み (build_model の中だけ), 零初期化, 凍結
+        context = LOAD_CONTEXT.get()
+        for name in self.order:
+            node = nodes[name]
+            module = self.nodes[name]
+            try:
+                if context is not None and "weights" in node:
+                    share = node.get("share")
+                    self.weights_report.append(load_node_weights(
+                        name, module, node["weights"], context,
+                        set(share) if isinstance(share, dict) else set()
+                    ))
+                if node.get("zero_init"):
+                    zero_parameters(module, node["zero_init"])
+                if node.get("train") is False:
+                    for parameter in module.parameters():
+                        parameter.requires_grad_(False)
+            except Exception as error:
+                raise NodeBuildError(name, error) from error
+
+            # 部分モデルの中で読んだ重みの報告 (ノードの名前を . でつなぐ)
+            if isinstance(module, GraphModel) and "share" not in node:
+                self.weights_report += [
+                    {**item, "node": f"{name}.{item['node']}"}
+                    for item in module.weights_report
+                ]
+
+        # 共有 (ノード全体は同じ部品, パラメータごとは同じパラメータ)
+        for name in self.order:
+            share = nodes[name].get("share")
+            if share is None:
+                continue
+            try:
+                self.share_node(name, share)
+            except Exception as error:
+                raise NodeBuildError(name, error) from error
+
+        # 評価の形に保つノード
+        self.eval_nodes = [
+            name for name in self.order
+            if nodes[name].get("eval_mode") is True
+        ]
+        self.train(self.training)
+
+    def share_node(self, name: str, share: Any) -> None:
+        """
+        ノードの部品かパラメータを, 共有の元のノードのものにする関数
+
+        Parameters
+        ----------
+        name: str
+            共有するノードの名前
+        share: Any
+            元のノードの名前 (ノード全体) か, パラメータの名前と
+            <ノード>.<パラメータの名前> の辞書
+
+        Returns
+        ----------
+        None
+
+        Raises
+        ----------
+        ValueError
+            元のノードを作れなかった場合 (形の推定で誤りのあるノード) と,
+            パラメータが無いか形が違う場合
+        """
+        # ノード全体は部品の入れ替え, パラメータごとは属性の入れ替え
+        if isinstance(share, str):
+            if share not in self.nodes:
+                raise ValueError(
+                    f"共有の元のノード {share} は作られていません (その"
+                    "ノードの誤りを先に直してください)"
+                )
+            self.nodes[name] = self.nodes[share]
+            return
+        for own, source, source_name in share_targets(share):
+            if source not in self.nodes:
+                raise ValueError(
+                    f"共有の元のノード {source} は作られていません (その"
+                    "ノードの誤りを先に直してください)"
+                )
+            tie_parameter(
+                self.nodes[name], own, self.nodes[source], source_name
+            )
+
+    def train(self, mode: bool = True) -> "GraphModel":
+        """
+        学習の形か評価の形にする関数
+
+        eval_mode のノードは, 学習の形にしても評価の形のままにする
+
+        Parameters
+        ----------
+        mode: bool = True
+            学習の形にするか
+
+        Returns
+        ----------
+        model: GraphModel
+            このモデル
+        """
+        # 全体の切り替えと, 評価の形に保つノードの戻し
+        super(GraphModel, self).train(mode)
+        for name in self.eval_nodes:
+            self.nodes[name].train(False)
+        model = self
+
+        return model
 
     def bind_inputs(self, args: tuple, kwargs: dict) -> dict[str, Any]:
         """
@@ -483,10 +623,15 @@ class GraphModel(nn.Module):
 
 
 def build_model(
-    spec: Union[str, Path, dict], seed: Optional[int] = None
+    spec: Union[str, Path, dict], seed: Optional[int] = None,
+    load_weights: bool = True, base_dir: Optional[Union[str, Path]] = None,
+    fetch: bool = True, weights_dirs: Optional[list] = None
 ) -> GraphModel:
     """
     モデルの定義から nn.Module を組み立てる関数
+
+    外部の重み (ノードの weights) を読んだ場合の報告は, 組み立てたモデルの
+    weights_report に入る
 
     Parameters
     ----------
@@ -494,6 +639,17 @@ def build_model(
         モデルの定義, またはその YAML か JSON のファイルのパス
     seed: Optional[int] = None
         重みの初期値の乱数の種, None の場合は今の乱数の状態のまま
+    load_weights: bool = True
+        外部の重みを読むか (学習した重みを後から load_state_dict で読む
+        場合は False)
+    base_dir: Optional[Union[str, Path]] = None
+        外部の重みの相対のパスの元のディレクトリ, None の場合は定義の
+        ファイルのディレクトリ (辞書で渡した場合は今のディレクトリ)
+    fetch: bool = True
+        外部の重みのライセンスを読むのにネットワークを使うか
+    weights_dirs: Optional[list] = None
+        外部の重みを読んでよいディレクトリ (base_dir と, 環境変数
+        ML_MODELCONTROL_WEIGHTS_DIRS のものに加える)
 
     Returns
     ----------
@@ -504,19 +660,34 @@ def build_model(
     ----------
     SpecError
         定義に誤りがある場合
+    NodeBuildError
+        部品を作れない場合, 外部の重みを読めない場合, パラメータの名前が
+        無い場合, 共有の形が違う場合
     """
     # 定義を読み込んで確かめ, 誤りがあれば組み立てずにエラー
+    source = spec
     spec = load_spec(spec)
     analysis = analyze(spec)
     if not analysis.ok:
         raise SpecError([vars(issue) for issue in analysis.issues])
 
+    # 外部の重みを読む設定 (相対のパスの元は定義のファイルのディレクトリ)
+    context = None
+    if load_weights:
+        if base_dir is None and isinstance(source, (str, Path)):
+            base_dir = Path(source).parent
+        context = make_context(Path(base_dir or "."), fetch, weights_dirs)
+
     # 種を決めた場合は, 外の乱数の状態を変えずに初期値を決めて組み立て
-    if seed is None:
-        model = GraphModel(spec, analysis)
-        return model
-    with torch.random.fork_rng(devices=[]):
-        torch.manual_seed(seed)
-        model = GraphModel(spec, analysis)
+    token = LOAD_CONTEXT.set(context)
+    try:
+        if seed is None:
+            model = GraphModel(spec, analysis)
+            return model
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(seed)
+            model = GraphModel(spec, analysis)
+    finally:
+        LOAD_CONTEXT.reset(token)
 
     return model
