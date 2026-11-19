@@ -91,9 +91,44 @@ class UnitSpec:
     code_import: str = ""
     code_args: list = field(default_factory=list)
 
+    # 起動の設定のモジュールから登録した自作の部品の, 宣言したモジュールの
+    # 名前 (他は空)
+    module: str = ""
+
 
 # 名前から部品を引く登録簿
 REGISTRY: dict[str, UnitSpec] = {}
+
+# 登録されていない部品の名前に付ける, 自作の部品の足し方の案内
+UNREGISTERED_HINT = (
+    "自作の部品なら起動の設定に足してください (部品を宣言したモジュールの"
+    "名前をアプリの起動の設定に書いて起動し直すか, Python のコードで "
+    "register_units_from([\"モジュールの名前\"]) を呼びます. 定義に書いた"
+    "名前からは何も読み込みません)"
+)
+
+
+def unregistered_message(name: str, hint: str = "") -> str:
+    """
+    登録されていない部品の誤りの文を作る関数
+
+    Parameters
+    ----------
+    name: str
+        部品の名前
+    hint: str = ""
+        書き間違いの候補 (「 (もしかして: nn.Linear)」のような文字)
+
+    Returns
+    ----------
+    message: str
+        登録されていないことと, 自作の部品の足し方の案内
+    """
+    message = (
+        f"この部品 ({name!r}) は登録されていません{hint}. {UNREGISTERED_HINT}"
+    )
+
+    return message
 
 
 # 手で説明を書いていない引数の, 名前ごとの説明 (多くの層とライブラリで
@@ -537,7 +572,7 @@ def get_unit(name: str) -> UnitSpec:
     # 組み込みの部品を読み込んでから検索
     ensure_loaded()
     if name not in REGISTRY:
-        raise KeyError(f"部品 {name} は登録されていません")
+        raise KeyError(unregistered_message(name))
     spec = REGISTRY[name]
 
     return spec

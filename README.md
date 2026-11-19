@@ -65,7 +65,7 @@ code = export_python("model.yaml")       # 同じ計算をする Python のコ�
 
 `validate`, `infer`, `build_model`, `export_python` は, ファイルのパスの代わりに定義の辞書 (`load_spec` で読んだものや, 手で作ったもの) も受け取る. `load_spec` は読み込みと版を直すことだけをし, 誤りは確かめない (確かめるのは `validate`).
 
-公開している名前は `GraphModel`, `SpecError`, `build_model`, `classify_license`, `clear_pretrained_cache`, `describe_spec_units`, `describe_units`, `dump_spec`, `embed_subgraph`, `export_python`, `get_unit`, `infer`, `list_examples`, `load_example`, `load_spec`, `pretrained_info`, `register_unit`, `validate`, `__version__`.
+公開している名前は `GraphModel`, `SpecError`, `build_model`, `classify_license`, `clear_pretrained_cache`, `describe_spec_units`, `describe_units`, `dump_spec`, `embed_subgraph`, `export_python`, `get_unit`, `infer`, `list_examples`, `load_example`, `load_spec`, `pretrained_info`, `register_unit`, `register_units_from`, `validate`, `__version__`.
 
 学習済みの重みを読むノードのライセンスは `pretrained_info("hf.AutoModel", {"model_name": "google-bert/bert-base-uncased"})` で読む. 配布元 (Hugging Face のモデルの説明. timm と segmentation_models_pytorch の重みはライブラリが持つ Hugging Face の置き場) から読み, `status` (`commercial`, `noncommercial`, `unknown`), 警告するか (`alert`), 画面に出す説明 (`message`), どこから読んだか (`source`), 推論の一式に写せるか (`redistributable`), 読んだ版 (`pinned_revision`) を返す. 重みを読まない場合は `None`. torchvision の重みには機械で読める情報が無いので `unknown`. ネットワークを使い, 結果はプロセスの中に覚える. 非公開と申請制のモデルは環境変数 `HF_TOKEN` のトークンで読み, `HF_HUB_OFFLINE=1` ではネットワークを使わない. 詳しくは docs/DESIGN.md の「学習済みの重みのライセンス」.
 
@@ -134,6 +134,8 @@ nodes:
 ```
 
 自作の部品は `register_unit(MyBlock, name="my.Block")` で登録すると, 定義の `unit` に書ける (`forward` が複数の値を返す場合は `outputs=["a", "b"]` で口の名前を付ける. 属性や辞書のキーで値を返す場合は `outputs={"logits": ["logits"], "last": ["hidden_states", -1]}` のように口ごとの取り出し方を書く. 引数の説明と範囲は `notes={"hidden": {"description": "中間の大きさ", "minimum": 1}}` のように付けられる. 名前の頭に組み込みの部品の頭 (`nn.`, `op.`, `sub.` など) は使えない).
+
+画面 (ML-CreateArchitecture) や推論のアプリで自作の部品を使う場合は, 部品をモジュールに宣言し, そのモジュールの名前をアプリの起動の設定に書く. アプリは起動のときに `register_units_from(["my_lab.units"])` で読み込み, `{"my_lab.units": ["my.Block", ...]}` のようにモジュールごとの部品の名前を返す. モジュールは `UNITS = [MyBlock, {"cls": MyPair, "name": "my.Pair", "outputs": ["a", "b"]}]` (クラスか `register_unit` の引数の辞書) か, `def register_units(register): register(MyBlock, name="my.Block")` の関数で部品を宣言する. 部品の一覧 (`describe_units`) の `module` に宣言したモジュールの名前が入る. 書いたモジュールは読み込んだときに任意のコードとして動くので, 信頼できるものだけを書く. モデルの定義に書かれた登録されていない名前からは何も読み込まず, 確認で「この部品 (...) は登録されていません. 自作の部品なら起動の設定に足してください」の誤りになる. 詳しくは docs/DESIGN.md の「自作の部品のモジュール」.
 
 ## ML-Found で学習する
 

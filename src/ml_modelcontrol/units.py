@@ -733,7 +733,7 @@ def register_unit(
     cls: type, name: Optional[str] = None, description: str = "",
     category: str = "custom",
     outputs: Optional[Union[list[str], dict[str, list]]] = None,
-    notes: Optional[dict] = None, overwrite: bool = False
+    notes: Optional[dict] = None, overwrite: bool = False, module: str = ""
 ) -> UnitSpec:
     """
     自作の nn.Module のクラスを部品として登録する関数
@@ -760,6 +760,9 @@ def register_unit(
         引数の説明と範囲 (params の名前ごとの description, minimum など)
     overwrite: bool = False
         同じ名前の自作の部品を上書きするか (組み込みの部品は上書き不可)
+    module: str = ""
+        部品を宣言したモジュールの名前 (register_units_from が付ける.
+        部品の一覧で, モジュールごとにまとめるため)
 
     Returns
     ----------
@@ -811,7 +814,8 @@ def register_unit(
         description=description, params=params, inputs=inputs, outputs=ports,
         forward_params=forward_params, extra_params=extra,
         builder=make_builder(cls), code_name=cls.__name__,
-        code_import=f"from {cls.__module__} import {cls.__name__}"
+        code_import=f"from {cls.__module__} import {cls.__name__}",
+        module=module
     )
     apply_notes(spec, {"params": notes or {}})
     describe_params(spec, cls)
