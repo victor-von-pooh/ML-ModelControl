@@ -9,6 +9,7 @@ from typing import Any, Callable, Optional, Union
 
 from torch import nn
 
+from ml_modelcontrol.pretrained import valid_hub_id
 from ml_modelcontrol.registry import (
     REGISTRY, ParamSpec, PortSpec, UnitSpec, get_unit
 )
@@ -28,6 +29,21 @@ EXPORT_NAMES = {"self", "torch", "nn", "ops", "result", "_pick"}
 
 # 複数の入力をまとめる演算 (つなぎ先が 1 つだけなら注意)
 COMBINING_UNITS = {"op.Add", "op.Multiply", "op.Concat", "op.Stack"}
+
+# 統計を持つ正規化の部品の名前の頭 (凍結しても統計は動くので注意)
+NORM_STATS_PREFIXES = ("nn.BatchNorm", "nn.SyncBatchNorm")
+
+# 外部の重みの項目, 出どころの項目, キーの付け替えの書き方の項目
+WEIGHTS_KEYS = {
+    "path", "hub", "file", "revision", "unit", "params", "state_key",
+    "remap", "strict"
+}
+WEIGHTS_SOURCES = ("path", "hub", "unit")
+REMAP_PREFIX_KEYS = {"from", "to"}
+REMAP_PATTERN_KEYS = {"pattern", "to", "offset"}
+
+# ノード全体を共有するノードに書けない項目 (元のノードに従うもの)
+SHARED_SETTINGS = ("train", "eval_mode", "zero_init", "weights")
 
 # 入力の例に使える型と, 値の作り方
 DTYPES = {
@@ -645,6 +661,7 @@ def check_node(
     analysis.connections[name] = check_connections(
         name, unit, node_inputs(node), input_names, nodes, issues
     )
+    check_state(name, node, unit, nodes, issues)
 
     # 複数の入力をまとめる演算に 1 つしかつないでいない場合 (つなぎ忘れ)
     if unit.name in COMBINING_UNITS:
@@ -660,6 +677,337 @@ def check_node(
                 "1 つだけです (つなぎ忘れでなければ, このノードは要りません)",
                 node=name, location="inputs"
             ))
+
+
+def check_state(
+    name: str, node: dict, unit: UnitSpec, nodes: dict, issues: list[Issue]
+) -> None:
+    """
+    ノードのパラメータの状態 (版 2 の項目) を確かめる関数
+
+    Parameters
+    ----------
+    name: str
+        ノードの名前
+    node: dict
+        ノードの定義
+    unit: UnitSpec
+        ノードの部品
+    nodes: dict
+        同じ定義の全てのノードの定義 (共有の元を引くため)
+    issues: list[Issue]
+        誤りと注意を加えるリスト
+
+    Returns
+    ----------
+    None
+    """
+    # 凍結と評価の形は真偽値
+    for key in ("train", "eval_mode"):
+        if key in node and not isinstance(node[key], bool):
+            issues.append(Issue(
+                "error", "invalid_state",
+                f"{key} は true か false にしてください", node=name,
+                location=key
+            ))
+
+    # 凍結した統計を持つ正規化 (評価の形を書いていないもの) は注意
+    if node.get("train") is False and "eval_mode" not in node and (
+        unit.name.startswith(NORM_STATS_PREFIXES)
+    ):
+        issues.append(Issue(
+            "warning", "frozen_norm_stats",
+            f"{unit.name} を凍結しても, 学習の形では平均と分散の統計は更新"
+            "されます. 統計も止める場合は eval_mode: true を書いてください "
+            "(更新してよい場合は eval_mode: false)", node=name,
+            location="eval_mode"
+        ))
+
+    # 零初期化, 外部の重み, 共有の確認
+    check_zero_init(name, node, issues)
+    if "weights" in node:
+        check_weights(name, node["weights"], issues)
+    if "share" in node:
+        check_share(name, node, nodes, issues)
+
+
+def check_zero_init(name: str, node: dict, issues: list[Issue]) -> None:
+    """
+    零初期化 (zero_init) の書き方を確かめる関数
+
+    Parameters
+    ----------
+    name: str
+        ノードの名前
+    node: dict
+        ノードの定義
+    issues: list[Issue]
+        誤りを加えるリスト
+
+    Returns
+    ----------
+    None
+    """
+    # 真偽値か, 空でない名前の文字のリスト
+    if "zero_init" not in node:
+        return
+    value = node["zero_init"]
+    names_ok = isinstance(value, list) and value and all(
+        isinstance(item, str) and item for item in value
+    )
+    if not isinstance(value, bool) and not names_ok:
+        issues.append(Issue(
+            "error", "invalid_state",
+            "zero_init は true か, パラメータの名前のリスト (例: [weight, "
+            "bias]) にしてください", node=name, location="zero_init"
+        ))
+
+
+def check_weights(name: str, weights: Any, issues: list[Issue]) -> None:
+    """
+    外部の重み (weights) の書き方を確かめる関数
+
+    ファイルとネットワークは使わず, 出どころが 1 つか, 値の型, キーの
+    付け替えの形と正規表現だけを見る
+
+    Parameters
+    ----------
+    name: str
+        ノードの名前
+    weights: Any
+        外部の重みの定義
+    issues: list[Issue]
+        誤りを加えるリスト
+
+    Returns
+    ----------
+    None
+    """
+    # 辞書と, 知らない項目の確認
+    if not isinstance(weights, dict):
+        issues.append(Issue(
+            "error", "invalid_weights",
+            "weights は path, hub か unit のどれか 1 つを持つ辞書にして"
+            "ください", node=name, location="weights"
+        ))
+        return
+    errors = [
+        (f"weights.{key}", f"weights に知らない項目 {key} があります")
+        for key in weights if key not in WEIGHTS_KEYS
+    ]
+
+    # 出どころは 1 つだけ, 項目ごとの値の型
+    sources = [key for key in WEIGHTS_SOURCES if key in weights]
+    if len(sources) != 1:
+        errors.append((
+            "weights", "weights の出どころは path (ファイル), hub (Hugging "
+            "Face の置き場), unit (学習済みの部品) のどれか 1 つにして"
+            "ください"
+        ))
+    for key in ("path", "hub", "file", "revision", "unit", "state_key"):
+        if key in weights and not (
+            isinstance(weights[key], str) and weights[key]
+        ):
+            errors.append((f"weights.{key}", f"{key} は空でない文字にして"
+                           "ください"))
+    if isinstance(weights.get("hub"), str) and weights["hub"] and (
+        not valid_hub_id(weights["hub"])
+    ):
+        errors.append((
+            "weights.hub", "hub は Hugging Face の置き場の名前 "
+            "(組織/名前) にしてください"
+        ))
+    if "hub" in weights and "file" not in weights:
+        errors.append((
+            "weights.file", "hub には置き場の中のファイルの名前 (file. 例: "
+            "model.safetensors) を書いてください"
+        ))
+    for key, source in (("file", "hub"), ("revision", "hub"),
+                        ("params", "unit")):
+        if key in weights and source not in weights:
+            errors.append((
+                f"weights.{key}", f"{key} は {source} と一緒に書いてください"
+            ))
+    if "unit" in weights and isinstance(weights["unit"], str):
+        try:
+            get_unit(weights["unit"])
+        except KeyError:
+            errors.append((
+                "weights.unit", f"部品 {weights['unit']!r} は登録されて"
+                "いません"
+            ))
+    if "params" in weights and not isinstance(weights["params"], dict):
+        errors.append(("weights.params", "params は辞書にしてください"))
+    if "strict" in weights and not isinstance(weights["strict"], bool):
+        errors.append(("weights.strict", "strict は true か false にして"
+                       "ください"))
+    errors += remap_errors(weights.get("remap", []))
+    issues += [
+        Issue("error", "invalid_weights", message, node=name,
+              location=location)
+        for location, message in errors
+    ]
+
+
+def remap_errors(remap: Any) -> list[tuple[str, str]]:
+    """
+    キーの付け替え (remap) の書き方の誤りを返す関数
+
+    Parameters
+    ----------
+    remap: Any
+        付け替えのリスト
+
+    Returns
+    ----------
+    errors: list[tuple[str, str]]
+        場所と誤りの文の組
+    """
+    # リストで, 要素は前置きの置き換えか正規表現の置き換え
+    if not isinstance(remap, list):
+        errors = [(
+            "weights.remap", "remap は付け替えのリストにしてください"
+        )]
+        return errors
+    errors = []
+    for index, item in enumerate(remap):
+        location = f"weights.remap.{index}"
+        keys = set(item) if isinstance(item, dict) else set()
+        if keys and keys <= REMAP_PREFIX_KEYS and keys >= {"from", "to"}:
+            if not all(isinstance(item[key], str) for key in keys):
+                errors.append((location, "from と to は文字にしてください"))
+            continue
+        if not keys or not keys <= REMAP_PATTERN_KEYS or (
+            not keys >= {"pattern", "to"}
+        ):
+            errors.append((
+                location, "付け替えは {from: 前置き, to: 置き換え} か, 番号を"
+                "付け替える場合の {pattern: 正規表現, to: 置き換え, offset: "
+                "整数 (省略可)} にしてください"
+            ))
+            continue
+        if not isinstance(item["pattern"], str) or (
+            not isinstance(item["to"], str)
+        ):
+            errors.append((location, "pattern と to は文字にしてください"))
+            continue
+        try:
+            groups = re.compile(item["pattern"]).groups
+        except re.error as error:
+            errors.append((
+                f"{location}.pattern", f"正規表現として読めません: {error}"
+            ))
+            continue
+        offset = item.get("offset", 0)
+        if not isinstance(offset, int) or isinstance(offset, bool):
+            errors.append((f"{location}.offset", "offset は整数にしてください"))
+        elif "offset" in item and groups != 1:
+            errors.append((
+                f"{location}.offset", "offset を使う正規表現は, 番号の"
+                "グループ (\\d+) をちょうど 1 つ持つものにしてください"
+            ))
+
+    return errors
+
+
+def check_share(
+    name: str, node: dict, nodes: dict, issues: list[Issue]
+) -> None:
+    """
+    重みの共有 (share) の書き方と, 共有の元を確かめる関数
+
+    Parameters
+    ----------
+    name: str
+        ノードの名前
+    node: dict
+        ノードの定義
+    nodes: dict
+        同じ定義の全てのノードの定義
+    issues: list[Issue]
+        誤りを加えるリスト
+
+    Returns
+    ----------
+    None
+    """
+    # ノード全体の共有 (名前) とパラメータごとの共有 (辞書) に分け,
+    # 元のノードの名前を集約
+    share = node["share"]
+    errors: list[tuple[str, str, str]] = []
+    if isinstance(share, str):
+        targets = [("share", share)]
+    elif isinstance(share, dict) and share and all(
+        isinstance(key, str) and key and isinstance(value, str)
+        and "." in value for key, value in share.items()
+    ):
+        targets = [
+            (f"share.{key}", value.partition(".")[0])
+            for key, value in share.items()
+        ]
+    else:
+        issues.append(Issue(
+            "error", "invalid_share",
+            "share はノードの名前か, パラメータの名前と <ノード>.<パラメータ"
+            "の名前> の辞書 (例: {weight: embed.weight}) にしてください",
+            node=name, location="share"
+        ))
+        return
+
+    # 元のノードがあり, 自分でなく, 元のノード自体は共有していないこと
+    for location, target in targets:
+        if target == name:
+            errors.append(("invalid_share", location, "自分自身とは共有でき"
+                           "ません"))
+        elif target not in nodes or not isinstance(nodes[target], dict):
+            errors.append((
+                "invalid_share", location, f"共有の元のノード {target} は"
+                f"同じ定義にありません{suggest(target, list(nodes))}"
+            ))
+        elif "share" in nodes[target]:
+            errors.append((
+                "invalid_share", location, f"共有の元のノード {target} も"
+                "共有しています. 大元のノードを書いてください"
+            ))
+
+    # ノード全体の共有は, 同じ部品と同じ引数で, 状態の項目を書かない
+    if isinstance(share, str) and not errors:
+        source = nodes[share]
+        if source.get("unit") != node.get("unit"):
+            errors.append((
+                "share_mismatch", "share", f"ノード全体の共有は同じ部品"
+                f"どうしだけです ({node.get('unit')} と "
+                f"{source.get('unit')}). 違う部品のパラメータは "
+                "{weight: <ノード>.weight} のように名前ごとに共有して"
+                "ください"
+            ))
+        elif "params" in node and (node.get("params") or {}) != (
+            source.get("params") or {}
+        ):
+            errors.append((
+                "share_mismatch", "params", f"共有の元のノード {share} と"
+                "引数が違います (共有するノードの引数は書かないか同じに"
+                "してください)"
+            ))
+    if isinstance(share, str):
+        errors += [
+            ("shared_setting", key, f"ノード全体を共有するノードに {key} は"
+             f"書けません (共有の元のノード {share} の設定に従います)")
+            for key in SHARED_SETTINGS if key in node
+        ]
+
+    # パラメータごとの共有の名前を零初期化に書くのは誤り
+    zero = node.get("zero_init")
+    if isinstance(share, dict) and isinstance(zero, list):
+        errors += [
+            ("shared_setting", "zero_init", f"共有するパラメータ {key} は "
+             "zero_init に書けません (共有の元のノードの設定に従います)")
+            for key in zero if key in share
+        ]
+    issues += [
+        Issue("error", code, message, node=name, location=location)
+        for code, location, message in errors
+    ]
 
 
 def check_combination(
