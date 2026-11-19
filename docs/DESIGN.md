@@ -186,7 +186,7 @@ nodes:
 - 入口: `pretrained_info(unit, params, fetch=True)`. ノードの部品の名前と引数の値 (書いていない引数は既定値) から, 重みを読む場合は情報の辞書を, 読まない場合 (`pretrained: false`, `weights` が空など. 既定値を含めて `offline` の値と同じか, `null`, `false`, 空の文字) は `None` を返す. 登録簿に無い部品の名前は `KeyError`, 辞書でない `params` は `TypeError`. 確認 (`validate`) と形の推定 (`infer`) には入れない (ネットワークを使うので, 画面がノードを選んだときなどに別に呼ぶ)
 - 返す辞書: `unit` (部品の名前), `library` (`huggingface`, `timm`, `torchvision`, `smp`, それ以外は部品の出どころ), `model` (書いたモデルの名前), `hub_id` (Hugging Face の置き場の名前. 分からなければ `None`), `revision` (求めた版), `pinned_revision` (Hugging Face が返したコミットの識別子. 読めなければ `None`), `license` (読んだライセンスの識別子. 複数ならカンマで並べる. 読めなければ `None`), `licenses` (識別子のリスト), `confirmed` (配布元の説明から読めたか), `status` (`commercial`, `noncommercial`, `unknown`), `redistributable` (真偽値), `gated` (申請制か), `alert` (警告するか. `status` が `commercial` でなければ真), `message` (画面にそのまま出す説明), `source` (どこから読んだか, 読めなかったか. 画面は `message` と並べて必ず出す), `url` (配布元のページ. 無ければ `None`)
 - 配布元の情報の読み方 (部品ごと)
-    - Hugging Face (`hf.*`): `model_name` を置き場の名前とし (`組織/名前` か `名前` の形で `..` を含まないものだけ. それ以外は読まずに `unknown`. API の別の道をトークン付きで読まないため), Hugging Face の API (`/api/models/<名前>/revision/<版>`) のモデルの説明 (`cardData.license`. 無ければ `license:` のタグ) と, コミットの識別子 (`sha`), 申請制か (`gated`) を読む. `model_name` が手元のディレクトリの場合は配布元が分からないので `unknown`
+    - Hugging Face (`hf.*`): `model_name` を置き場の名前とし (`組織/名前` か `名前` の形で `..` を含まないものだけ. それ以外と, 版が `.` か `..` のものは読まずに `unknown`. API の別の道をトークン付きで読まないため), Hugging Face の API (`/api/models/<名前>/revision/<版>`) のモデルの説明 (`cardData.license`. 無ければ `license:` のタグ) と, コミットの識別子 (`sha`), 申請制か (`gated`) を読む. `model_name` が手元のディレクトリの場合は配布元が分からないので `unknown`
     - timm (`timm.Model`, `pretrained: true`): timm のモデルの設定 (`pretrained_cfg`) の `hf_hub_id` を置き場の名前として Hugging Face から読む. Hugging Face を読めない場合と置き場の名前の無いモデルは, timm の設定の `license` を参考に見せるが, 配布元の説明で確かめていないので `unknown` にする (どこから読んだかにそう書く)
     - segmentation_models_pytorch (`smp.*`, `encoder_weights` が空でない): ライブラリが符号化器と重みごとに持つ置き場の名前と版 (`repo_id`, `revision`) から Hugging Face を読む. timm の符号化器 (`tu-` の頭) は timm と同じ
     - torchvision (`tv.Model`): 重みに機械で読めるライセンスの情報が無いので `unknown` (「読めなかった」). 他のライブラリ (MONAI など) も同じ
@@ -194,7 +194,7 @@ nodes:
 - 再配布 (`redistributable`): `status` が `commercial` のものだけ真. 非商用のライセンスにも条件つきで再配布を許すものはあるが, 一式を商用で使う場合に備えて写さない側に倒す. 偽のものは, 推論の一式に重みを写さず, 出どころの名前と `pinned_revision` から読む
 - 警告の文は日本語で, どこから読んだかを必ず添える (例: 「Hugging Face のモデルの説明から読んだ (置き場の名前)」「timm のモデルの設定から読んだ (配布元の説明では確かめていない)」「Hugging Face から読めなかった (置き場の名前: ネットワークの誤り)」)
 - トークンと環境変数: 非公開のモデルと申請制のモデルの情報は, 環境変数 `HF_TOKEN` (無ければ `HUGGING_FACE_HUB_TOKEN`) のトークンで読む (transformers と同じ変数なので, 重みの読み込みにも同じものが使われる). トークンは返す辞書と文に入れず, 転送先には渡さない. `HF_ENDPOINT` で Hugging Face の置き場の URL を変えられる (ミラー). `HF_HUB_OFFLINE=1` か `fetch=False` ではネットワークを使わず, 覚えた結果が無ければ「読めなかった (ネットワークを使わない設定)」にする
-- 覚えておく (キャッシュ): Hugging Face の結果をプロセスの中に置き場の名前, 版, トークンの有無ごとに覚え (トークンを設定したら読み直す), 読めた結果は 1 日, 読めなかった結果は 10 分の間は読み直さない (画面がノードを選ぶたびに読みに行かないため. 読めなかった場合は, つながった後に読み直せるように短くする). `clear_pretrained_cache()` で消す. ファイルには残さない
+- 覚えておく (キャッシュ): Hugging Face の結果をプロセスの中に置き場の名前, 版, トークンの有無ごとに覚え (トークンを設定したら読み直す), 読めた結果は 1 日, 読めなかった結果は 10 分の間は読み直さない (画面がノードを選ぶたびに読みに行かないため. 読めなかった場合は, つながった後に読み直せるように短くする). 覚える数は 512 まで (超えたら古いものから消す. 画面から打ちかけの名前が来ても増え続けないため). `clear_pretrained_cache()` で消す. ファイルには残さない
 - テストはネットワークを使わない (Hugging Face を読む関数を差し替える)
 
 ## 課題の型への広げ方 (2026-11-18 の方針)

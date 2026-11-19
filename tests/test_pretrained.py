@@ -308,6 +308,7 @@ def test_invalid_inputs(fake_hub: FakeHub) -> None:
     for name in ("../../api/whoami-v2", "a/b/c", "org/..", "a b"):
         info = hf_info(name)
         assert info["status"] == "unknown" and info["url"] is None
+    assert hf_info("org/apache", revision="..")["status"] == "unknown"
     assert fake_hub.calls == []
     assert pretrained_info(
         "hf.AutoModel", {"model_name": "org/apache", "pretrained": ""}
@@ -359,6 +360,11 @@ def test_unreadable_and_cache(
     clear_pretrained_cache()
     hf_info("org/apache")
     assert fake_hub.calls.count(("org/apache", "main")) == 2
+
+    # 上限を超えたら古いものから消す
+    monkeypatch.setattr(pretrained, "CACHE_LIMIT", 1)
+    hf_info("org/list")
+    assert list(pretrained.CACHE) == [("org/list", "main", False)]
 
 
 def test_offline(fake_hub: FakeHub, monkeypatch: pytest.MonkeyPatch) -> None:

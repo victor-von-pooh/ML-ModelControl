@@ -63,6 +63,10 @@ STATUS_TEXT = {
 CACHE_SECONDS = 24 * 60 * 60
 FAILURE_CACHE_SECONDS = 10 * 60
 
+# 覚える結果の数の上限 (画面から打ちかけの名前が来ても増え続けないように,
+# 超えたら古いものから消す)
+CACHE_LIMIT = 512
+
 # Hugging Face の API を待つ秒数
 FETCH_TIMEOUT = 10.0
 
@@ -341,7 +345,10 @@ def read_hub(hub_id: str, revision: str, fetch: bool) -> dict:
             "error": str(error)
         }
     with CACHE_LOCK:
+        CACHE.pop(key, None)
         CACHE[key] = (now, dict(result))
+        while len(CACHE) > CACHE_LIMIT:
+            CACHE.pop(next(iter(CACHE)))
 
     return result
 
@@ -442,8 +449,10 @@ def fill_from_hub(info: dict, fetch: bool) -> bool:
     ok: bool
         読めた場合は True, 読めなかった場合は False (source に理由)
     """
-    # 置き場の名前の形でないものは読まない (API の別の道を読まないため)
-    if not valid_hub_id(info["hub_id"]):
+    # 置き場の名前の形でないものと, . か .. の版は読まない (API の別の道を
+    # 読まないため)
+    revision = info["revision"] or "main"
+    if not valid_hub_id(info["hub_id"]) or revision in (".", ".."):
         info["source"] = (
             f"読めなかった ({info['hub_id']} は Hugging Face の置き場の名前の"
             "形でない)"
@@ -452,7 +461,7 @@ def fill_from_hub(info: dict, fetch: bool) -> bool:
         return False
 
     # 読めた場合はライセンスと版, 読めなかった場合は理由を記録
-    result = read_hub(info["hub_id"], info["revision"] or "main", fetch)
+    result = read_hub(info["hub_id"], revision, fetch)
     ok = bool(result["ok"])
     if ok:
         info["licenses"] = list(result["licenses"])
