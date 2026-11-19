@@ -427,14 +427,18 @@ def state_code(spec: dict, analysis: Any) -> list[str]:
         module = f"self.nodes[{name!r}]"
         if "weights" in node:
             body.append(
-                f"        # ノード {name} の外部の重みは, このコードでは"
-                "読まない (build_model で読んだ重みを load_state_dict で読む)"
+                f"        # ノード {name} の外部の重みは読み込みの対象外"
+            )
+            body.append(
+                "        # (build_model で組み立てたモデルの state_dict を "
+                "load_state_dict で読み込み)"
             )
             warnings.warn(
                 f"ノード {name} の外部の重み (weights) は書き出すコードでは"
                 "読みません. ML-ModelControl の build_model で組み立てた"
-                "モデルの state_dict を保存して読ませてください",
-                stacklevel=3
+                "モデルの state_dict を保存し, 書き出したクラスの "
+                "load_state_dict で読み込んでください",
+                stacklevel=4
             )
         zero = node.get("zero_init")
         if zero is True:
@@ -515,7 +519,7 @@ def train_code(spec: dict, analysis: Any, class_name: str) -> list[str]:
         return lines
     lines = [
         "", "    def train(self, mode=True):",
-        "        # 全体を切り替えた後, 評価の形に保つノードを戻す",
+        "        # 全体の切り替えと, 評価の形に保つノードの戻し",
         f"        super({class_name}, self).train(mode)",
         "        for name in self.eval_nodes:",
         "            self.nodes[name].train(False)", "",

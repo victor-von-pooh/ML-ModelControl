@@ -325,6 +325,8 @@ def embed_subgraph(
         )
     target = load_spec(spec)
     copied = load_spec(source)
+    if not isinstance(source, dict):
+        absolute_weights(copied, Path(source).parent)
     subgraphs = target.get("subgraphs")
     nested = copied.pop("subgraphs", None)
     subgraphs = {} if subgraphs is None else subgraphs
@@ -357,6 +359,41 @@ def embed_subgraph(
     target["subgraphs"] = subgraphs
 
     return target
+
+
+def absolute_weights(spec: dict, base_dir: Path) -> None:
+    """
+    定義の外部の重みの相対のパスを, 元のディレクトリからの絶対のパスに
+    直す関数
+
+    別のディレクトリの定義を写すと, 相対のパスの元 (写し先の定義の
+    ディレクトリ) が変わるため
+
+    Parameters
+    ----------
+    spec: dict
+        モデルの定義 (部分モデルの中も直す. その場で書き換える)
+    base_dir: Path
+        元の定義のファイルのディレクトリ
+
+    Returns
+    ----------
+    None
+    """
+    # 本体と部分モデルのノードの weights.path の書き換え
+    graphs = [spec]
+    subgraphs = spec.get("subgraphs")
+    if isinstance(subgraphs, dict):
+        graphs += list(subgraphs.values())
+    for graph in graphs:
+        nodes = graph.get("nodes") if isinstance(graph, dict) else None
+        for node in (nodes if isinstance(nodes, dict) else {}).values():
+            weights = node.get("weights") if isinstance(node, dict) else None
+            path = weights.get("path") if isinstance(weights, dict) else None
+            if isinstance(path, str) and path and not (
+                Path(path).expanduser().is_absolute()
+            ):
+                weights["path"] = str((base_dir / path).resolve())
 
 
 def parse_ref(ref: str) -> tuple[str, Optional[str]]:

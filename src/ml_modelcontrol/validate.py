@@ -82,6 +82,9 @@ class Analysis:
         default_factory=dict
     )
 
+    # 共有するノードの名前ごとの, 共有の元のノードの名前
+    shares: dict[str, list[str]] = field(default_factory=dict)
+
     @property
     def ok(self) -> bool:
         """
@@ -662,6 +665,7 @@ def check_node(
         name, unit, node_inputs(node), input_names, nodes, issues
     )
     check_state(name, node, unit, nodes, issues)
+    analysis.shares[name] = share_sources(node.get("share"))
 
     # 複数の入力をまとめる演算に 1 つしかつないでいない場合 (つなぎ忘れ)
     if unit.name in COMBINING_UNITS:
@@ -729,6 +733,34 @@ def check_state(
         check_weights(name, node["weights"], issues)
     if "share" in node:
         check_share(name, node, nodes, issues)
+
+
+def share_sources(share: Any) -> list[str]:
+    """
+    共有 (share) の元のノードの名前を返す関数
+
+    Parameters
+    ----------
+    share: Any
+        ノードの名前か, パラメータの名前と <ノード>.<名前> の辞書
+
+    Returns
+    ----------
+    sources: list[str]
+        元のノードの名前 (共有しない場合と書き方の誤りは空)
+    """
+    # 名前はそのまま, 辞書は値の最初の . の前
+    if isinstance(share, str):
+        sources = [share]
+    elif isinstance(share, dict):
+        sources = [
+            value.partition(".")[0] for value in share.values()
+            if isinstance(value, str)
+        ]
+    else:
+        sources = []
+
+    return sources
 
 
 def check_zero_init(name: str, node: dict, issues: list[Issue]) -> None:
@@ -873,7 +905,7 @@ def remap_errors(remap: Any) -> list[tuple[str, str]]:
     for index, item in enumerate(remap):
         location = f"weights.remap.{index}"
         keys = set(item) if isinstance(item, dict) else set()
-        if keys and keys <= REMAP_PREFIX_KEYS and keys >= {"from", "to"}:
+        if keys == REMAP_PREFIX_KEYS:
             if not all(isinstance(item[key], str) for key in keys):
                 errors.append((location, "from と to は文字にしてください"))
             continue
@@ -970,7 +1002,7 @@ def check_share(
                 "共有しています. 大元のノードを書いてください"
             ))
 
-    # ノード全体の共有は, 同じ部品と同じ引数で, 状態の項目を書かない
+    # ノード全体の共有の, 同じ部品と同じ引数と, 状態の項目が無いことの確認
     if isinstance(share, str) and not errors:
         source = nodes[share]
         if source.get("unit") != node.get("unit"):
@@ -981,13 +1013,10 @@ def check_share(
                 "{weight: <ノード>.weight} のように名前ごとに共有して"
                 "ください"
             ))
-        elif "params" in node and (node.get("params") or {}) != (
-            source.get("params") or {}
-        ):
+        elif (node.get("params") or {}) != (source.get("params") or {}):
             errors.append((
                 "share_mismatch", "params", f"共有の元のノード {share} と"
-                "引数が違います (共有するノードの引数は書かないか同じに"
-                "してください)"
+                "引数が違います (共有するノードにも同じ引数を書いてください)"
             ))
     if isinstance(share, str):
         errors += [

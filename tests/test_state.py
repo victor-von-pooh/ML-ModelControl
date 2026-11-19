@@ -10,8 +10,8 @@ import yaml
 from torch import nn, optim
 
 from ml_modelcontrol import (
-    build_model, dump_spec, export_python, infer, list_examples,
-    load_example, load_spec, validate
+    build_model, dump_spec, embed_subgraph, export_python, infer,
+    list_examples, load_example, load_spec, validate
 )
 from ml_modelcontrol import pretrained, state
 from ml_modelcontrol.state import remap_key
@@ -302,7 +302,7 @@ def encoder_spec(weights: dict) -> dict:
     return spec
 
 
-def save_state(path: Path, state: dict) -> dict:
+def save_state(path: Path, tensors: dict) -> dict:
     """
     state_dict をファイルに保存する関数
 
@@ -310,17 +310,18 @@ def save_state(path: Path, state: dict) -> dict:
     ----------
     path: Path
         保存先
-    state: dict
+    tensors: dict
         キーとテンソルの辞書
 
     Returns
     ----------
-    state: dict
+    saved: dict
         保存した辞書
     """
-    torch.save(state, path)
+    torch.save(tensors, path)
+    saved = tensors
 
-    return state
+    return saved
 
 
 def test_partial_load_counts_and_prefix_remap(tmp_path: Path) -> None:
@@ -338,7 +339,7 @@ def test_partial_load_counts_and_prefix_remap(tmp_path: Path) -> None:
     None
     """
     # block0 は合い, block1 の重みは形が違い, block1 の bias は無く,
-    # 頭の重みは使わない
+    # 頭の重みは使わない重み
     state = save_state(tmp_path / "base.pt", {
         "model.blocks.0.weight": torch.full((4, 4), 2.0),
         "model.blocks.0.bias": torch.full((4,), 3.0),
@@ -374,7 +375,7 @@ def test_partial_load_counts_and_prefix_remap(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="strict: false"):
         build_model(encoder_spec(weights), base_dir=tmp_path)
 
-    # 1 つも読めない (付け替えの書き間違い) と誤り, 読まない設定では読まない
+    # 1 つも読めない (付け替えの書き間違い) 場合の誤りと, 読まない設定
     weights["remap"] = [{"from": "model.block.", "to": "nodes.block"}]
     with pytest.raises(ValueError, match="読める重みがありません"):
         build_model(encoder_spec(weights), base_dir=tmp_path)
@@ -666,7 +667,7 @@ def test_tied_parameters_gradient_from_both_uses() -> None:
     ----------
     None
     """
-    # 同じパラメータの物で, パラメータ数は 1 回だけ数える
+    # 同じパラメータの物で, パラメータ数は 1 回だけの数え方
     model = build_model(tied_spec(), seed=0)
     assert model.nodes.head.weight is model.nodes.embed.weight
     assert len(list(model.parameters())) == 1
@@ -772,7 +773,7 @@ def test_shared_tower_and_save_load(tmp_path: Path) -> None:
     )
     assert load_spec(tmp_path / "model.yaml") == load_spec(two_tower_spec())
 
-    # 埋め込みの共有も保存と読み込みで残る
+    # 埋め込みの共有の, 保存と読み込みの後の保持
     tied = build_model(tied_spec(), seed=0)
     torch.save(tied.state_dict(), tmp_path / "tied.pt")
     dump_spec(tied_spec(), tmp_path / "tied.json")
@@ -837,7 +838,7 @@ def test_versions() -> None:
     ----------
     None
     """
-    # 同梱の例 (版 1) は読めて組み立てられ, 版 1 のまま書く
+    # 同梱の例 (版 1) の読み込みと組み立て, 版 1 のままの保存
     for example in list_examples():
         spec = load_example(example["name"])
         assert spec["format_version"] == 2
@@ -845,7 +846,7 @@ def test_versions() -> None:
     model = build_model(load_example("mlp"), seed=0)
     assert model.weights_report == []
 
-    # 版 2 の項目を使えば版 2 で書く (部分モデルの中だけでも)
+    # 版 2 の項目を使う場合の版 2 での保存 (部分モデルの中だけでも)
     spec = two_tower_spec()
     del spec["nodes"]["item_tower"]["share"]
     spec["subgraphs"]["tower"]["nodes"]["fc"]["train"] = False
@@ -861,7 +862,7 @@ def test_versions() -> None:
         load_spec(old)
     assert codes(old) == ["invalid_spec"]
 
-    # ライブラリより新しい版ははっきり止まる
+    # ライブラリより新しい版のはっきりした停止
     newer = mlp_spec()
     newer["format_version"] = 3
     with pytest.raises(ValueError, match="format_version 3 の定義は"):
@@ -919,3 +920,87 @@ def test_export_state() -> None:
         warnings.simplefilter("always")
         export_python(mlp_spec(fc1={"weights": {"path": "a.pt"}}))
     assert any("外部の重み" in str(item.message) for item in caught)
+
+
+def test_tied_checkpoint_and_embedded_paths(tmp_path: Path) -> None:
+    """
+    共有した重みを 1 回だけ持つファイルを strict で読めることと, 別の
+    ディレクトリの定義を写しても外部の重みのパスが合うことを確かめる関数
+
+    Parameters
+    ----------
+    tmp_path: Path
+        pytest が用意する一時ディレクトリ
+
+    Returns
+    ----------
+    None
+    """
+    # 埋め込みの重みだけのファイル (共有した出力の重みのキーは無い)
+    save_state(tmp_path / "tied.pt", {"weight": torch.ones(10, 4)})
+    spec = tied_spec()
+    spec["subgraphs"] = {"lm": {
+        "inputs": {"ids": {}}, "nodes": spec.pop("nodes"),
+        "outputs": {"logits": "head"}
+    }}
+    spec["nodes"] = {"lm": {
+        "unit": "sub.lm", "inputs": "ids",
+        "weights": {"path": "tied.pt",
+                    "remap": [{"from": "", "to": "nodes.embed."}]}
+    }}
+    spec["outputs"] = {"logits": "lm"}
+    model = build_model(spec, base_dir=tmp_path)
+    report = model.weights_report[0]
+    assert (report["loaded"], report["new"]) == (1, 0)
+    assert torch.all(model.nodes.lm.nodes.head.weight == 1.0)
+
+    # 別のディレクトリの定義を写して保存しても, 重みのファイルを読める
+    inner = tmp_path / "inner"
+    inner.mkdir()
+    (tmp_path / "tied.pt").rename(inner / "tied.pt")
+    dump_spec(spec, inner / "lm.yaml")
+    outer = {
+        "format_version": 2, "inputs": {"ids": {"shape": [2, 3],
+                                                "dtype": "int64"}},
+        "nodes": {"m": {"unit": "sub.wrapped", "inputs": "ids"}},
+        "outputs": {"logits": "m"}
+    }
+    outer = embed_subgraph(outer, "wrapped", inner / "lm.yaml")
+    dump_spec(outer, tmp_path / "outer.yaml")
+    model = build_model(tmp_path / "outer.yaml")
+    assert model.weights_report[0]["node"] == "m.lm"
+
+
+def test_share_source_skipped_in_infer() -> None:
+    """
+    形の推定で, 共有の元が計算できない場合に共有するノードも計算しない
+    ことを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 誤りのあるノードの先の a を, b が共有
+    spec = mlp_spec()
+    spec["nodes"]["fc1"]["params"]["out_features"] = -1
+    spec["nodes"]["b"] = {
+        "unit": "nn.Linear",
+        "params": {"in_features": 8, "out_features": 3},
+        "inputs": "x", "share": "fc2"
+    }
+    spec["outputs"]["z"] = "b"
+    result = infer(spec)
+    assert result["nodes"]["fc2"]["status"] == "skipped"
+    assert result["nodes"]["b"]["status"] == "skipped"
+
+    # 引数を書かない (か違う) ノード全体の共有は誤り
+    spec = mlp_spec()
+    spec["nodes"]["b"] = {"unit": "nn.Linear", "inputs": "x",
+                          "share": "fc1"}
+    assert "missing_param" in codes(spec)
+    spec["nodes"]["b"]["params"] = {"in_features": 8, "out_features": 4}
+    assert "share_mismatch" in codes(spec)

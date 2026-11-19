@@ -544,11 +544,15 @@ def usable_analysis(
     for name in analysis.order:
         if name in bad or name not in analysis.units:
             continue
+        # つなぎ先と共有の元 (作られないと共有できない) の確認
         causes = [
             target
             for targets in analysis.connections.get(name, {}).values()
             for target, _ in targets
             if target in bad or target in skipped
+        ] + [
+            source for source in analysis.shares.get(name, [])
+            if source in bad or source in skipped
         ]
         if causes:
             skipped[name] = causes[0]

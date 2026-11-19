@@ -20,8 +20,8 @@ SKIP_NEW_SUFFIXES = ("num_batches_tracked",)
 
 @dataclass
 class LoadContext:
-    # 相対のパスの元のディレクトリと, ライセンスを読むのにネットワークを
-    # 使うか
+    # 相対のパスの元のディレクトリと, ライセンスの読み込みでのネットワークの
+    # 使用の有無
     base_dir: Path
     fetch: bool = True
 
@@ -98,7 +98,7 @@ def remap_key(key: str, remap: list[dict]) -> str:
     return renamed
 
 
-def shifted(to: str, number: str, offset: int, key: str) -> str:
+def shifted(to: str, number: Optional[str], offset: int, key: str) -> str:
     """
     置き換えの文字の \\1 を, 番号に offset を足した数に置き換える関数
 
@@ -106,8 +106,8 @@ def shifted(to: str, number: str, offset: int, key: str) -> str:
     ----------
     to: str
         置き換えの文字
-    number: str
-        正規表現のグループに当たった文字
+    number: Optional[str]
+        正規表現のグループに当たった文字 (当たらなければ None)
     offset: int
         足す数
     key: str
@@ -124,6 +124,10 @@ def shifted(to: str, number: str, offset: int, key: str) -> str:
         番号でない場合と, 負になる場合
     """
     # 数字だけのグループを数として足し, 参照の書き方の 2 通りを置換
+    if number is None:
+        raise ValueError(
+            f"キー {key} で offset を足す正規表現のグループが当たっていません"
+        )
     if not number.isdigit():
         raise ValueError(
             f"キー {key} の番号 {number!r} は数字ではないので offset を"
@@ -203,6 +207,11 @@ def read_file(path: Path) -> Any:
     ----------
     loaded: Any
         読んだ値 (torch.load は weights_only=True で読む)
+
+    Raises
+    ----------
+    ValueError
+        ファイルが無い場合と, safetensors が無い場合
     """
     # safetensors は専用の読み方, それ以外は任意のコードを動かさない読み方
     if not path.is_file():
@@ -271,8 +280,13 @@ def read_source(
         キーとテンソルの辞書 (付け替える前)
     source: str
         出どころの説明
-    license: Optional[dict]
+    license_info: Optional[dict]
         ライセンスの情報 (読めない出どころは None)
+
+    Raises
+    ----------
+    ValueError
+        ファイルが無い場合, 読めない場合, 部品が使えない場合
     """
     # ファイル (相対のパスは元のディレクトリから)
     license_info: Optional[dict] = None
@@ -303,9 +317,11 @@ def read_source(
         unit = get_unit(weights["unit"])
         if unit.builder is None:
             raise ValueError(f"部品 {unit.name} は使えません: {unit.reason}")
-        module = unit.builder(
-            **{key: to_value(value) for key, value in params.items()}
-        )
+        # 外の乱数の状態を変えない作成 (種を決めた初期値が読み込みに依らない)
+        with torch.random.fork_rng(devices=[]):
+            module = unit.builder(
+                **{key: to_value(value) for key, value in params.items()}
+            )
         loaded = module.state_dict()
         source = f"部品 {unit.name}"
         license_info = pretrained_info(unit.name, params, context.fetch)
@@ -392,9 +408,19 @@ def load_node_weights(
         for key, tensor in state.items()
         if key in target and tensor.shape != target[key].shape
     ]
+    # 共有したパラメータ (同じ物の別のキー) は, どれかが読めれば新しい
+    # 重みに数えない (共有した重みはファイルに 1 回だけ保存されるため)
+    aliases: dict[int, list[str]] = {}
+    for key, tensor in module.state_dict(keep_vars=True).items():
+        aliases.setdefault(id(tensor), []).append(key)
+    covered = {
+        key for keys in aliases.values()
+        if any(item in matched for item in keys) for key in keys
+    }
     new = [
         key for key in target
-        if key not in state and not key.endswith(SKIP_NEW_SUFFIXES)
+        if key not in state and key not in covered
+        and not key.endswith(SKIP_NEW_SUFFIXES)
     ]
     unused = [key for key in state if key not in target]
     strict = bool(weights.get("strict", True))
@@ -533,6 +559,7 @@ def share_targets(share: Any) -> list[tuple[str, str, str]]:
     targets: list[tuple[str, str, str]]
         このノードのパラメータの名前, 元のノード, 元のパラメータの名前
     """
+    # 値を最初の . で元のノードとパラメータの名前に分割
     targets = []
     for name, ref in share.items():
         node, _, source_name = str(ref).partition(".")

@@ -253,12 +253,18 @@ class GraphModel(nn.Module):
         # ノード全体は部品の入れ替え, パラメータごとは属性の入れ替え
         if isinstance(share, str):
             if share not in self.nodes:
-                raise ValueError(f"共有の元のノード {share} を作れません")
+                raise ValueError(
+                    f"共有の元のノード {share} は作られていません (その"
+                    "ノードの誤りを先に直してください)"
+                )
             self.nodes[name] = self.nodes[share]
             return
         for own, source, source_name in share_targets(share):
             if source not in self.nodes:
-                raise ValueError(f"共有の元のノード {source} を作れません")
+                raise ValueError(
+                    f"共有の元のノード {source} は作られていません (その"
+                    "ノードの誤りを先に直してください)"
+                )
             tie_parameter(
                 self.nodes[name], own, self.nodes[source], source_name
             )
@@ -279,7 +285,7 @@ class GraphModel(nn.Module):
         model: GraphModel
             このモデル
         """
-        # 全体を切り替えた後, 評価の形に保つノードを戻す
+        # 全体の切り替えと, 評価の形に保つノードの戻し
         super(GraphModel, self).train(mode)
         for name in self.eval_nodes:
             self.nodes[name].train(False)
@@ -649,6 +655,9 @@ def build_model(
     ----------
     SpecError
         定義に誤りがある場合
+    NodeBuildError
+        部品を作れない場合, 外部の重みを読めない場合, パラメータの名前が
+        無い場合, 共有の形が違う場合
     """
     # 定義を読み込んで確かめ, 誤りがあれば組み立てずにエラー
     source = spec
