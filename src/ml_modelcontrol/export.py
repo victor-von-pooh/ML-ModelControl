@@ -522,8 +522,9 @@ def train_code(spec: dict, analysis: Any, class_name: str) -> list[str]:
         "        # 全体の切り替えと, 評価の形に保つノードの戻し",
         f"        super({class_name}, self).train(mode)",
         "        for name in self.eval_nodes:",
-        "            self.nodes[name].train(False)", "",
-        "        return self"
+        "            self.nodes[name].train(False)",
+        "        model = self", "",
+        "        return model"
     ]
 
     return lines

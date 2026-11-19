@@ -397,46 +397,66 @@ def test_partial_load_regex_offset_and_state_key(tmp_path: Path) -> None:
     ----------
     None
     """
-    # 層 6 と 7 を block0 と block1 に (番号を -6), 入れ物は checkpoint.model
+    # 12 層のファイル (layer.0 から 11) の層 6 と 7 を block0 と block1 に
+    # (番号を -6. 0 から 5 は負になるので当たらず, そのまま使わない重み),
+    # 入れ物は checkpoint.model
     layers = {
         f"layer.{index}.{kind}": torch.full(
             (4, 4) if kind == "weight" else (4,), float(index)
         )
-        for index in range(8) for kind in ("weight", "bias")
+        for index in range(12) for kind in ("weight", "bias")
     }
     torch.save({"checkpoint": {"model": layers}, "epoch": 3},
                tmp_path / "full.pt")
     weights = {
-        "path": str(tmp_path / "full.pt"),
+        "path": "full.pt",
         "state_key": "checkpoint.model",
         "remap": [{
-            "pattern": r"^layer\.([67])\.", "to": r"nodes.block\1.",
+            "pattern": r"^layer\.(\d+)\.", "to": r"nodes.block\1.",
             "offset": -6
         }]
     }
-    model = build_model(encoder_spec(weights))
+    model = build_model(encoder_spec(weights), base_dir=tmp_path)
     report = model.weights_report[0]
     assert (report["loaded"], report["mismatched"], report["new"],
-            report["unused"]) == (4, 0, 0, 12)
+            report["unused"]) == (4, 0, 0, 20)
+    assert "layer.0.weight" in report["unused_keys"]
+    assert "nodes.block5.weight" in report["unused_keys"]
     assert torch.all(model.nodes.enc.nodes.block0.weight == 6.0)
     assert torch.all(model.nodes.enc.nodes.block1.bias == 7.0)
 
-    # 付け替えの規則 (最初に当たったもの, 当たらなければそのまま)
+    # . を含むキーの入れ物はリストで書ける
+    torch.save({"model.ema": layers}, tmp_path / "ema.pt")
+    model = build_model(encoder_spec({
+        **weights, "path": "ema.pt", "state_key": ["model.ema"]
+    }), base_dir=tmp_path)
+    assert model.weights_report[0]["loaded"] == 4
+
+    # 付け替えの規則 (最初に当たったもの, 先頭から当てる, 負になれば次の
+    # 規則, 0 で詰めた幅は保持, 当たらなければそのまま)
     rules = [
         {"from": "a.", "to": "b."},
-        {"pattern": r"^x\.(\d+)\.", "to": r"y.\1.", "offset": 2}
+        {"pattern": r"x\.(\d+)\.", "to": r"y.\1.", "offset": -2},
+        {"pattern": r"x\.(\d+)\.", "to": r"low.\1."}
     ]
     assert remap_key("a.w", rules) == "b.w"
-    assert remap_key("x.3.w", rules) == "y.5.w"
-    assert remap_key("z.w", rules) == "z.w"
+    assert remap_key("z.a.w", rules) == "z.a.w"
+    assert remap_key("x.3.w", rules) == "y.1.w"
+    assert remap_key("x.07.w", rules) == "y.05.w"
+    assert remap_key("x.1.w", rules) == "low.1.w"
+    assert remap_key("q.x.3.w", rules) == "q.x.3.w"
 
     # 入れ物のキーの誤りと, 付け替えた後の重なり
     with pytest.raises(ValueError, match="state_key"):
-        build_model(encoder_spec({**weights, "state_key": "missing"}))
+        build_model(encoder_spec({**weights, "state_key": "missing"}),
+                    base_dir=tmp_path)
+    with pytest.raises(ValueError, match="辞書"):
+        build_model(encoder_spec({**weights, "state_key": "checkpoint"}),
+                    base_dir=tmp_path)
     collide = {**weights, "remap": [{"pattern": r"^layer\.\d+\.",
                                      "to": "nodes.block0."}]}
     with pytest.raises(ValueError, match="同じキー"):
-        build_model(encoder_spec(collide))
+        build_model(encoder_spec(collide), base_dir=tmp_path)
 
 
 def test_weights_validation() -> None:
@@ -1004,3 +1024,174 @@ def test_share_source_skipped_in_infer() -> None:
     assert "missing_param" in codes(spec)
     spec["nodes"]["b"]["params"] = {"in_features": 8, "out_features": 4}
     assert "share_mismatch" in codes(spec)
+
+
+def test_remap_and_param_validation() -> None:
+    """
+    正規表現の参照と offset の書き方, 重みを他の所から読む引数, 入れ物の
+    キーのリストの確認を確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 正しい書き方 (入れ物のキーのリストも) は誤りなし
+    good = {"path": "a.pt", "state_key": ["model.ema"], "remap": [
+        {"pattern": r"^layer\.(\d+)\.", "to": r"nodes.block\1.",
+         "offset": -6},
+        {"pattern": r"^(?P<head>h)\.", "to": r"\g<head>2."}
+    ]}
+    assert "invalid_weights" not in codes(encoder_spec(good))
+
+    # 名前の付いたグループの offset, 参照の無い offset, 無いグループの参照
+    bad = [
+        {"pattern": r"^layer\.(?P<n>\d+)\.", "to": r"b\g<n>.", "offset": 1},
+        {"pattern": r"^layer\.(\d+)\.", "to": "b.", "offset": 1},
+        {"pattern": r"^layer\.(\d+)\.", "to": r"b\2."},
+        {"pattern": r"^layer\.(\d+)\.", "to": r"b\g<x>."}
+    ]
+    for rule in bad:
+        weights = {"path": "a.pt", "remap": [rule]}
+        assert "invalid_weights" in codes(encoder_spec(weights)), rule
+
+    # 重みを他の所から読む引数は, ノードにも外部の重みの部品にも書けない
+    spec = mlp_spec(fc1={"weights": {
+        "unit": "nn.Linear",
+        "params": {"in_features": 8, "out_features": 8,
+                   "checkpoint_path": "x.pth"}
+    }})
+    assert "unsafe_param" not in codes(spec)
+    assert "invalid_weights" in codes(spec)
+    spec = mlp_spec()
+    spec["nodes"]["fc1"]["params"]["pretrained_path"] = "x.pth"
+    assert "unsafe_param" in codes(spec)
+
+
+# テンソル以外の値 (読むとコードを動かせる値) の例
+class Payload:
+    pass
+
+
+def test_weights_file_safety(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    読んでよいディレクトリの外 (リンクで出るものも), 大きすぎるファイル,
+    テンソル以外を含むファイルを読まないことを確かめる関数
+
+    Parameters
+    ----------
+    tmp_path: Path
+        pytest が用意する一時ディレクトリ
+    monkeypatch: pytest.MonkeyPatch
+        環境変数の差し替えの道具
+
+    Returns
+    ----------
+    None
+    """
+    # 定義のディレクトリと, その外の重みのファイル
+    base = tmp_path / "specs"
+    other = tmp_path / "other"
+    base.mkdir()
+    other.mkdir()
+    layer = {"nodes.block0.weight": torch.ones(4, 4)}
+    torch.save(layer, other / "w.pt")
+    (base / "link.pt").symlink_to(other / "w.pt")
+    monkeypatch.delenv("ML_MODELCONTROL_WEIGHTS_DIRS", raising=False)
+    loose = {"strict": False}
+    for path in ("../other/w.pt", str(other / "w.pt"), "link.pt"):
+        with pytest.raises(ValueError, match="外にある"):
+            build_model(encoder_spec({"path": path, **loose}), base_dir=base)
+
+    # 環境変数か引数で足したディレクトリは読める
+    model = build_model(encoder_spec({"path": "link.pt", **loose}),
+                        base_dir=base, weights_dirs=[other])
+    assert model.weights_report[0]["loaded"] == 1
+    monkeypatch.setenv("ML_MODELCONTROL_WEIGHTS_DIRS", str(other))
+    model = build_model(encoder_spec({"path": "../other/w.pt", **loose}),
+                        base_dir=base)
+    assert model.weights_report[0]["loaded"] == 1
+
+    # 大きさの上限を超えるファイルは読む前に誤り
+    monkeypatch.setenv("ML_MODELCONTROL_WEIGHTS_MAX_BYTES", "10")
+    with pytest.raises(ValueError, match="上限"):
+        build_model(encoder_spec({"path": "link.pt", **loose}),
+                    base_dir=base)
+    monkeypatch.delenv("ML_MODELCONTROL_WEIGHTS_MAX_BYTES")
+
+    # テンソル以外を含むファイルは, weights_only を外す案内をせずに誤り
+    torch.save({"nodes.block0.weight": Payload()}, base / "bad.pt")
+    with pytest.raises(ValueError, match="テンソル以外") as caught:
+        build_model(encoder_spec({"path": "bad.pt", **loose}), base_dir=base)
+    assert "weights_only=False" not in str(caught.value)
+
+
+def test_safetensors_partial_read(tmp_path: Path) -> None:
+    """
+    safetensors のファイルから, 読めるキーだけを読むことを確かめる関数
+
+    Parameters
+    ----------
+    tmp_path: Path
+        pytest が用意する一時ディレクトリ
+
+    Returns
+    ----------
+    None
+    """
+    # 読めるキーだけを safe_open で読み, 他は読まない
+    safetensors = pytest.importorskip("safetensors.torch")
+    safetensors.save_file({
+        "nodes.block0.weight": torch.full((4, 4), 2.0),
+        "other.weight": torch.zeros(100, 100)
+    }, str(tmp_path / "w.safetensors"))
+    model = build_model(encoder_spec({
+        "path": "w.safetensors", "strict": False
+    }), base_dir=tmp_path)
+    report = model.weights_report[0]
+    assert (report["loaded"], report["unused"]) == (1, 1)
+    assert torch.all(model.nodes.enc.nodes.block0.weight == 2.0)
+
+
+def test_share_with_weights_and_train_warning(tmp_path: Path) -> None:
+    """
+    パラメータごとの共有と外部の重みを同じノードに書いた場合に, 共有する
+    名前を読まずに注意を出すことと, 学習するかの食い違いの注意を確かめる
+    関数
+
+    Parameters
+    ----------
+    tmp_path: Path
+        pytest が用意する一時ディレクトリ
+
+    Returns
+    ----------
+    None
+    """
+    # 出力の層の weight は埋め込みと共有, bias だけをファイルから
+    save_state(tmp_path / "head.pt", {
+        "weight": torch.full((10, 4), 5.0), "bias": torch.full((10,), 3.0)
+    })
+    spec = tied_spec()
+    spec["nodes"]["head"]["params"]["bias"] = True
+    spec["nodes"]["head"]["weights"] = {"path": "head.pt"}
+    with pytest.warns(UserWarning, match="共有するパラメータ weight"):
+        model = build_model(spec, base_dir=tmp_path, seed=0)
+    report = model.weights_report[0]
+    assert (report["loaded"], report["new"], report["unused"]) == (1, 0, 1)
+    assert report["warnings"]
+    assert model.nodes.head.weight is model.nodes.embed.weight
+    assert not torch.all(model.nodes.embed.weight == 5.0)
+    assert torch.all(model.nodes.head.bias == 3.0)
+
+    # 共有するノードだけを凍結すると, 共有した重みは元に従うと注意
+    spec = tied_spec()
+    spec["nodes"]["head"]["train"] = False
+    assert "share_train_mismatch" in codes(spec)
+    spec["nodes"]["embed"]["train"] = False
+    assert "share_train_mismatch" not in codes(spec)

@@ -9,7 +9,7 @@ from typing import Any, Callable, Optional, Union
 
 from torch import nn
 
-from ml_modelcontrol.pretrained import valid_hub_id
+from ml_modelcontrol.pretrained import WEIGHT_OVERRIDE_PARAMS, valid_hub_id
 from ml_modelcontrol.registry import (
     REGISTRY, ParamSpec, PortSpec, UnitSpec, get_unit
 )
@@ -661,6 +661,11 @@ def check_node(
         unit.forward_params, issues
     )
     check_combination(name, unit, node.get("params"), issues)
+    issues += [
+        Issue("error", "unsafe_param", message, node=name,
+              location=f"params.{key}")
+        for key, message in override_errors(node.get("params"))
+    ]
     analysis.connections[name] = check_connections(
         name, unit, node_inputs(node), input_names, nodes, issues
     )
@@ -763,6 +768,38 @@ def share_sources(share: Any) -> list[str]:
     return sources
 
 
+def override_errors(params: Any) -> list[tuple[str, str]]:
+    """
+    学習済みの重みを名前と版以外の所から読む引数の誤りを返す関数
+
+    それらの引数はライブラリの読み込み (weights_only の確かめの外になり
+    得るもの) を通るので, 定義では外部の重み (weights.path) で読む
+
+    Parameters
+    ----------
+    params: Any
+        ノードか外部の重みの部品の引数
+
+    Returns
+    ----------
+    errors: list[tuple[str, str]]
+        引数の名前と誤りの文の組
+    """
+    # 空でない上書きの引数ごとの誤り
+    if not isinstance(params, dict):
+        errors: list[tuple[str, str]] = []
+        return errors
+    errors = [
+        (key, f"引数 {key} で重みを読むことはできません. 重みのファイルは"
+              " weights の path (任意のコードを動かさない読み方で読む) に"
+              "書いてください")
+        for key in WEIGHT_OVERRIDE_PARAMS
+        if params.get(key) not in (None, False, "", {}, [])
+    ]
+
+    return errors
+
+
 def check_zero_init(name: str, node: dict, issues: list[Issue]) -> None:
     """
     零初期化 (zero_init) の書き方を確かめる関数
@@ -836,6 +873,12 @@ def check_weights(name: str, weights: Any, issues: list[Issue]) -> None:
             "Face の置き場), unit (学習済みの部品) のどれか 1 つにして"
             "ください"
         ))
+    state_key = weights.get("state_key")
+    if isinstance(state_key, list) and state_key and all(
+        isinstance(item, str) and item for item in state_key
+    ):
+        weights = {key: value for key, value in weights.items()
+                   if key != "state_key"}
     for key in ("path", "hub", "file", "revision", "unit", "state_key"):
         if key in weights and not (
             isinstance(weights[key], str) and weights[key]
@@ -870,6 +913,10 @@ def check_weights(name: str, weights: Any, issues: list[Issue]) -> None:
             ))
     if "params" in weights and not isinstance(weights["params"], dict):
         errors.append(("weights.params", "params は辞書にしてください"))
+    errors += [
+        (f"weights.params.{key}", message)
+        for key, message in override_errors(weights.get("params"))
+    ]
     if "strict" in weights and not isinstance(weights["strict"], bool):
         errors.append(("weights.strict", "strict は true か false にして"
                        "ください"))
@@ -924,20 +971,70 @@ def remap_errors(remap: Any) -> list[tuple[str, str]]:
             errors.append((location, "pattern と to は文字にしてください"))
             continue
         try:
-            groups = re.compile(item["pattern"]).groups
+            compiled = re.compile(item["pattern"])
         except re.error as error:
             errors.append((
                 f"{location}.pattern", f"正規表現として読めません: {error}"
             ))
             continue
-        offset = item.get("offset", 0)
-        if not isinstance(offset, int) or isinstance(offset, bool):
-            errors.append((f"{location}.offset", "offset は整数にしてください"))
-        elif "offset" in item and groups != 1:
-            errors.append((
-                f"{location}.offset", "offset を使う正規表現は, 番号の"
-                "グループ (\\d+) をちょうど 1 つ持つものにしてください"
-            ))
+        errors += pattern_errors(location, item, compiled)
+
+    return errors
+
+
+def pattern_errors(
+    location: str, item: dict, compiled: re.Pattern
+) -> list[tuple[str, str]]:
+    """
+    正規表現の付け替えの置き換えの参照と offset の誤りを返す関数
+
+    Parameters
+    ----------
+    location: str
+        付け替えの場所 (weights.remap.0 など)
+    item: dict
+        {pattern, to, offset} の付け替え
+    compiled: re.Pattern
+        読んだ正規表現
+
+    Returns
+    ----------
+    errors: list[tuple[str, str]]
+        場所と誤りの文の組
+    """
+    # 置き換えの参照 (\1 と \g<名前か番号>) が正規表現のグループにあること
+    errors = []
+    numbers = [int(item) for item in re.findall(r"\\(\d+)", item["to"])]
+    named = re.findall(r"\\g<([^>]*)>", item["to"])
+    numbers += [int(item) for item in named if item.isdigit()]
+    missing = [str(number) for number in numbers if number > compiled.groups]
+    missing += [
+        item for item in named
+        if not item.isdigit() and item not in compiled.groupindex
+    ]
+    if missing:
+        errors.append((
+            f"{location}.to", f"置き換えの参照 ({', '.join(missing)}) に"
+            "当たるグループが正規表現にありません"
+        ))
+
+    # offset は整数で, 番号のグループがちょうど 1 つ (名前を付けない) で,
+    # 置き換えに \1 か \g<1> があること
+    if "offset" not in item:
+        return errors
+    offset = item["offset"]
+    if not isinstance(offset, int) or isinstance(offset, bool):
+        errors.append((f"{location}.offset", "offset は整数にしてください"))
+    elif compiled.groups != 1 or compiled.groupindex:
+        errors.append((
+            f"{location}.offset", "offset を使う正規表現は, 名前の無い番号の"
+            "グループ (\\d+) をちょうど 1 つ持つものにしてください"
+        ))
+    elif "\\1" not in item["to"] and "\\g<1>" not in item["to"]:
+        errors.append((
+            f"{location}.offset", "offset を使う場合は, 置き換えに番号の"
+            "参照 \\1 を書いてください"
+        ))
 
     return errors
 
@@ -1024,6 +1121,21 @@ def check_share(
              f"書けません (共有の元のノード {share} の設定に従います)")
             for key in SHARED_SETTINGS if key in node
         ]
+
+    # パラメータごとの共有で, 学習するかが共有の元と違えば注意 (共有した
+    # パラメータは元のノードの設定に従うため)
+    if isinstance(share, dict) and not errors:
+        frozen = node.get("train") is False
+        for source in sorted({value.partition(".")[0]
+                              for value in share.values()}):
+            if (nodes[source].get("train") is False) != frozen:
+                issues.append(Issue(
+                    "warning", "share_train_mismatch",
+                    f"共有するパラメータは共有の元のノード {source} の設定 "
+                    f"(学習{'しない' if not frozen else 'する'}) に従います. "
+                    "このノードの train はそれ以外のパラメータだけに効きます",
+                    node=name, location="train"
+                ))
 
     # パラメータごとの共有の名前を零初期化に書くのは誤り
     zero = node.get("zero_init")

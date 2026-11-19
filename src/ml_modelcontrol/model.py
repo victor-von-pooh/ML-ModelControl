@@ -6,7 +6,7 @@ from torch import nn
 
 from ml_modelcontrol.spec import load_spec, parse_ref
 from ml_modelcontrol.state import (
-    LOAD_CONTEXT, LoadContext, load_node_weights, share_targets,
+    LOAD_CONTEXT, load_node_weights, make_context, share_targets,
     tie_parameter, zero_parameters
 )
 from ml_modelcontrol.validate import Analysis, analyze
@@ -193,8 +193,10 @@ class GraphModel(nn.Module):
             module = self.nodes[name]
             try:
                 if context is not None and "weights" in node:
+                    share = node.get("share")
                     self.weights_report.append(load_node_weights(
-                        name, module, node["weights"], context
+                        name, module, node["weights"], context,
+                        set(share) if isinstance(share, dict) else set()
                     ))
                 if node.get("zero_init"):
                     zero_parameters(module, node["zero_init"])
@@ -623,7 +625,7 @@ class GraphModel(nn.Module):
 def build_model(
     spec: Union[str, Path, dict], seed: Optional[int] = None,
     load_weights: bool = True, base_dir: Optional[Union[str, Path]] = None,
-    fetch: bool = True
+    fetch: bool = True, weights_dirs: Optional[list] = None
 ) -> GraphModel:
     """
     モデルの定義から nn.Module を組み立てる関数
@@ -645,6 +647,9 @@ def build_model(
         ファイルのディレクトリ (辞書で渡した場合は今のディレクトリ)
     fetch: bool = True
         外部の重みのライセンスを読むのにネットワークを使うか
+    weights_dirs: Optional[list] = None
+        外部の重みを読んでよいディレクトリ (base_dir と, 環境変数
+        ML_MODELCONTROL_WEIGHTS_DIRS のものに加える)
 
     Returns
     ----------
@@ -671,7 +676,7 @@ def build_model(
     if load_weights:
         if base_dir is None and isinstance(source, (str, Path)):
             base_dir = Path(source).parent
-        context = LoadContext(Path(base_dir or "."), fetch)
+        context = make_context(Path(base_dir or "."), fetch, weights_dirs)
 
     # 種を決めた場合は, 外の乱数の状態を変えずに初期値を決めて組み立て
     token = LOAD_CONTEXT.set(context)
