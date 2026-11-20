@@ -222,6 +222,34 @@ class Mean(nn.Module):
         return mean
 
 
+class Max(nn.Module):
+    def __init__(self, dim: int = 1, keepdim: bool = False):
+        # 親クラスのコンストラクタを呼び出す
+        super(Max, self).__init__()
+
+        # 最大値を取る次元と, その次元を残すかを保存
+        self.dim = dim
+        self.keepdim = keepdim
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        """
+        決めた次元で最大値を取る関数
+
+        Parameters
+        ----------
+        input: torch.Tensor
+            最大値を取るテンソル
+
+        Returns
+        ----------
+        largest: torch.Tensor
+            最大値 (どの位置かの番号は返さない)
+        """
+        largest = input.amax(dim=self.dim, keepdim=self.keepdim)
+
+        return largest
+
+
 class Select(nn.Module):
     def __init__(self, index: int = 0):
         # 親クラスのコンストラクタを呼び出す

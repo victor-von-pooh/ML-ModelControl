@@ -1,0 +1,149 @@
+format_version: 1
+name: unet_segmentation
+description: >-
+  画像の領域の分割の 2 段の U-Net: (バッチ, チャンネル, 高さ, 幅) の 0 から
+  1 の画像から, (バッチ, クラス数, 高さ, 幅) の画素ごとのスコアを出す
+  (3 チャンネル, 背景を含む 2 クラス. 高さと幅は 4 の倍数).
+  入力のチャンネル数は enc1a の in_channels, クラス数は head の
+  out_channels で合わせる.
+  学習の step で画素ごとの交差エントロピーを計算する
+  (領域の値からクラスの番号への置き換えは学習のコードに書く)
+inputs:
+  image: {shape: [4, 3, 32, 32], ui: {x: 0, y: 100}}
+nodes:
+  # 縮める側の 1 段目 (3 → 16 チャンネル, 32x32)
+  enc1a:
+    unit: nn.Conv2d
+    params: {in_channels: 3, out_channels: 16, kernel_size: 3, padding: 1}
+    inputs: image
+    ui: {x: 220, y: 100}
+  enc1a_act:
+    unit: nn.ReLU
+    inputs: enc1a
+    ui: {x: 470, y: 100}
+  enc1b:
+    unit: nn.Conv2d
+    params: {in_channels: 16, out_channels: 16, kernel_size: 3, padding: 1}
+    inputs: enc1a_act
+    ui: {x: 720, y: 100}
+  enc1b_act:
+    unit: nn.ReLU
+    inputs: enc1b
+    ui: {x: 970, y: 100}
+  # 縮める側の 2 段目 (16 → 32 チャンネル, 16x16)
+  pool1:
+    unit: nn.MaxPool2d
+    params: {kernel_size: 2}
+    inputs: enc1b_act
+    ui: {x: 970, y: 260}
+  enc2a:
+    unit: nn.Conv2d
+    params: {in_channels: 16, out_channels: 32, kernel_size: 3, padding: 1}
+    inputs: pool1
+    ui: {x: 1220, y: 260}
+  enc2a_act:
+    unit: nn.ReLU
+    inputs: enc2a
+    ui: {x: 1470, y: 260}
+  enc2b:
+    unit: nn.Conv2d
+    params: {in_channels: 32, out_channels: 32, kernel_size: 3, padding: 1}
+    inputs: enc2a_act
+    ui: {x: 1720, y: 260}
+  enc2b_act:
+    unit: nn.ReLU
+    inputs: enc2b
+    ui: {x: 1970, y: 260}
+  # 一番下 (32 → 64 チャンネル, 8x8)
+  pool2:
+    unit: nn.MaxPool2d
+    params: {kernel_size: 2}
+    inputs: enc2b_act
+    ui: {x: 1970, y: 420}
+  mid_a:
+    unit: nn.Conv2d
+    params: {in_channels: 32, out_channels: 64, kernel_size: 3, padding: 1}
+    inputs: pool2
+    ui: {x: 2220, y: 420}
+  mid_a_act:
+    unit: nn.ReLU
+    inputs: mid_a
+    ui: {x: 2470, y: 420}
+  mid_b:
+    unit: nn.Conv2d
+    params: {in_channels: 64, out_channels: 64, kernel_size: 3, padding: 1}
+    inputs: mid_a_act
+    ui: {x: 2720, y: 420}
+  mid_b_act:
+    unit: nn.ReLU
+    inputs: mid_b
+    ui: {x: 2970, y: 420}
+  # 広げる側の 2 段目 (8x8 → 16x16, 縮める側の 2 段目との連結)
+  up2:
+    unit: nn.ConvTranspose2d
+    params: {in_channels: 64, out_channels: 32, kernel_size: 2, stride: 2}
+    inputs: mid_b_act
+    ui: {x: 3220, y: 260}
+  cat2:
+    unit: op.Concat
+    params: {dim: 1}
+    inputs: {xs: [up2, enc2b_act]}
+    ui: {x: 3470, y: 260}
+  dec2a:
+    unit: nn.Conv2d
+    params: {in_channels: 64, out_channels: 32, kernel_size: 3, padding: 1}
+    inputs: cat2
+    ui: {x: 3720, y: 260}
+  dec2a_act:
+    unit: nn.ReLU
+    inputs: dec2a
+    ui: {x: 3970, y: 260}
+  dec2b:
+    unit: nn.Conv2d
+    params: {in_channels: 32, out_channels: 32, kernel_size: 3, padding: 1}
+    inputs: dec2a_act
+    ui: {x: 4220, y: 260}
+  dec2b_act:
+    unit: nn.ReLU
+    inputs: dec2b
+    ui: {x: 4470, y: 260}
+  # 広げる側の 1 段目 (16x16 → 32x32, 縮める側の 1 段目との連結)
+  up1:
+    unit: nn.ConvTranspose2d
+    params: {in_channels: 32, out_channels: 16, kernel_size: 2, stride: 2}
+    inputs: dec2b_act
+    ui: {x: 4720, y: 100}
+  cat1:
+    unit: op.Concat
+    params: {dim: 1}
+    inputs: {xs: [up1, enc1b_act]}
+    ui: {x: 4970, y: 100}
+  dec1a:
+    unit: nn.Conv2d
+    params: {in_channels: 32, out_channels: 16, kernel_size: 3, padding: 1}
+    inputs: cat1
+    ui: {x: 5220, y: 100}
+  dec1a_act:
+    unit: nn.ReLU
+    inputs: dec1a
+    ui: {x: 5470, y: 100}
+  dec1b:
+    unit: nn.Conv2d
+    params: {in_channels: 16, out_channels: 16, kernel_size: 3, padding: 1}
+    inputs: dec1a_act
+    ui: {x: 5720, y: 100}
+  dec1b_act:
+    unit: nn.ReLU
+    inputs: dec1b
+    ui: {x: 5970, y: 100}
+  # 画素ごとのクラスのスコア (1x1 の畳み込み, 16 → クラス数)
+  head:
+    unit: nn.Conv2d
+    params: {in_channels: 16, out_channels: 2, kernel_size: 1}
+    inputs: dec1b_act
+    ui: {x: 6220, y: 100}
+outputs:
+  logits: head
+ui:
+  outputs:
+    logits: {x: 6470, y: 120}

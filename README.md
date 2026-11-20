@@ -95,7 +95,7 @@ code = export_python("model.yaml")       # 同じ計算をする Python のコ�
 
 学習済みの重みを読む引数 (Hugging Face の `pretrained`, `tv.Model` の `weights`, `timm.Model` の `pretrained`, `smp` の `encoder_weights` など) は, 形の推定 (`infer`) では重みを読まない値に置き換える (組み立てでは書いた値のまま). Hugging Face のモデルは `params` の `model_name` に名前かローカルのパスを書く. 外部のコード (`trust_remote_code`) は使わない.
 
-同梱した例のモデルの定義 (全結合, 残差, 部分モデル (残差のブロック) を重ねたもの (`stacked_blocks`), CNN, LSTM, Transformer のエンコーダー, GCN, BERT の分類 (Hugging Face の BERT と, 部品から組んだ小さな BERT), 受け持ちごとの雛形 (VAE, GAN の生成器と識別器, 拡散の雑音の予測, 対照学習の符号化器, 推薦の 2 塔, 強化学習の方策と価値)) は `list_examples()` で一覧にし, `load_example("cnn_classifier")` で読み込める. 受け持ちごとの雛形は, 説明に学習の step で行うことを書く. 自分のモデルを書き始めるときの元にできる.
+同梱した例のモデルの定義 (全結合, 残差, 部分モデル (残差のブロック) を重ねたもの (`stacked_blocks`), CNN, LSTM, Transformer のエンコーダー, GCN, BERT の分類 (Hugging Face の BERT と, 部品から組んだ小さな BERT), 受け持ちごとの雛形 (VAE, GAN の生成器と識別器, 拡散の雑音の予測, 対照学習の符号化器, 推薦の 2 塔, 強化学習の方策と価値), 画像の領域の分割 (U-Net) と点群の予測 (観測の点から決まった数の点)) は `list_examples()` で一覧にし, `load_example("cnn_classifier")` で読み込める. 受け持ちごとの雛形は, 説明に学習の step で行うことを書く. 自分のモデルを書き始めるときの元にできる.
 
 `export_python("model.yaml")` で, 同じ計算をする `nn.Module` のクラスの Python のコードを書き出せる (`state_dict` のキーは `build_model` と同じ). 書き出したコードはこのライブラリが無くても動く (演算 (`op.Add` など) と Hugging Face の部品のクラスの定義をコードに書き写す. 外部のライブラリ (PyTorch Geometric, timm など) の部品を使う場合は, そのライブラリは要る). `export_python(..., standalone=False)` にすると, 書き写さずに `from ml_modelcontrol import ops` などで読み込む. `path` を渡すとファイルに保存し, `class_name` で本体のクラスの名前 (既定 `Model`) を変えられる. 自作の部品は登録したクラスのモジュールから読み込む行を書く (関数の中や, 実行したスクリプトで定義したクラスは書き出せない).
 
