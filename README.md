@@ -1,6 +1,6 @@
 # ML-ModelControl
 
-「機械学習を全て GUI 上で行う」うちの「モデルの作成・選定」の段階のライブラリ. 画面のアプリ [ML-CreateArchitecture](https://github.com/victor-von-pooh/ML-CreateArchitecture) が使う.
+「機械学習を全て GUI 上で行う」うちの「モデルの作成・選定」の段階のライブラリ. モデルの部品を登録簿として持ち, 部品をつないだ定義から PyTorch の `nn.Module` を組み立てる. 画面のアプリ [ML-CreateArchitecture](https://github.com/victor-von-pooh/ML-CreateArchitecture) が使う.
 
 ## できること
 
