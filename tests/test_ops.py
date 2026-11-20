@@ -268,3 +268,37 @@ def test_variadic_port_notes() -> None:
              for name in ("Add", "Multiply", "Concat", "Stack")}
     assert "関係しない" in notes["Add"] and "関係しない" in notes["Multiply"]
     assert "書いた順" in notes["Concat"] and "書いた順" in notes["Stack"]
+
+
+def test_max() -> None:
+    """
+    op.Max が決めた次元の最大値を取り, 点の並びに依らないことと, 一覧に
+    説明付きで出ることを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 最大値と, 次元を残す場合の形
+    value = torch.tensor([[[1.0, -2.0], [3.0, 0.5], [-1.0, 4.0]]])
+    assert torch.equal(ops.Max()(value), torch.tensor([[3.0, 4.0]]))
+    assert ops.Max(dim=1, keepdim=True)(value).shape == (1, 1, 2)
+    assert torch.equal(ops.Max(dim=-1)(value), torch.tensor([[1.0, 3.0, 4.0]]))
+
+    # 点の並びを入れ替えても同じ値で, 勾配は最大の所だけに流れる
+    points = torch.randn(2, 10, 4, requires_grad=True)
+    order = torch.randperm(10)
+    assert torch.equal(ops.Max()(points), ops.Max()(points[:, order]))
+    ops.Max()(points).sum().backward()
+    assert points.grad is not None
+    assert int(points.grad.sum().item()) == 2 * 4
+
+    # 登録簿の説明と引数の説明
+    unit = get_unit("op.Max")
+    assert unit.category == "op" and unit.description
+    assert [port.name for port in unit.outputs] == ["out"]
+    assert all(param.description for param in unit.params)

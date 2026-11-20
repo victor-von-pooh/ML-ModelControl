@@ -61,7 +61,10 @@ def test_example_names() -> None:
     """
     # 一覧に名前と説明, 無い名前やパスは読めない
     names = {example["name"] for example in list_examples()}
-    assert {"mlp", "cnn_classifier", "gcn_graph_classifier"} <= names
+    assert {
+        "mlp", "cnn_classifier", "gcn_graph_classifier",
+        "unet_segmentation", "point_cloud_predictor"
+    } <= names
     with pytest.raises(KeyError):
         load_example("../pyproject")
 
@@ -366,3 +369,76 @@ def test_merge_imports() -> None:
         "import torch", "", "from torch import nn",
         "from torch_geometric.nn import GCNConv, MeanAggregation"
     ]
+
+
+def test_segmentation_example() -> None:
+    """
+    U-Net の例が, 問題の設定の骨組みの仮のモデルと同じく (バッチ,
+    チャンネル, 高さ, 幅) の画像から同じ高さと幅のクラスのスコアを出す
+    ことを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    from ml_modelcontrol import build_model
+
+    # 例の形と, 例と違う 4 の倍数の高さと幅のどちらでも同じ大きさで返す
+    spec = load_example("unet_segmentation")
+    result = infer(spec)
+    assert result["outputs"]["logits"]["shape"] == [4, 2, 32, 32]
+    model = build_model(spec, seed=0).eval()
+    with torch.no_grad():
+        logits = model(torch.rand(2, 3, 48, 64))
+    assert logits.shape == (2, 2, 48, 64)
+
+    # 骨組みと同じく, 画素ごとの交差エントロピーで学べる (勾配が入力の
+    # 最初の層まで届く)
+    model.train()
+    labels = torch.randint(0, 2, (2, 16, 16))
+    loss = torch.nn.CrossEntropyLoss()(
+        model(torch.rand(2, 3, 16, 16)), labels
+    )
+    loss.backward()
+    assert model.nodes["enc1a"].weight.grad is not None
+
+
+def test_point_cloud_example() -> None:
+    """
+    点群の例が, 問題の設定の骨組みの仮のモデルと同じく (バッチ, 入力の
+    点の数, 3) から (バッチ, 出す点の数, 3) を出し, 入力の点の数と並びに
+    依らないことを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    from ml_modelcontrol import build_model
+
+    # 例の形と, 例と違う入力の点の数
+    spec = load_example("point_cloud_predictor")
+    result = infer(spec)
+    assert result["outputs"]["cloud"]["shape"] == [4, 256, 3]
+    model = build_model(spec, seed=0).eval()
+    points = torch.randn(2, 1000, 3)
+    with torch.no_grad():
+        cloud = model(points)
+        shuffled = model(points[:, torch.randperm(1000)])
+    assert cloud.shape == (2, 256, 3)
+    assert torch.allclose(cloud, shuffled, atol=1e-6)
+
+    # 骨組みと同じく Chamfer 距離で学べる (勾配が最初の層まで届く)
+    model.train()
+    target = torch.randn(2, 300, 3)
+    pairs = torch.cdist(model(points), target) ** 2
+    loss = (pairs.min(dim=2).values.mean() + pairs.min(dim=1).values.mean())
+    loss.backward()
+    assert model.nodes["encode1"].weight.grad is not None

@@ -1,0 +1,69 @@
+format_version: 1
+name: point_cloud_predictor
+description: >-
+  点群の予測: (バッチ, 入力の点の数, 3) の観測の点から, (バッチ, 256, 3)
+  の決まった数の点を出す. PointNet の形の符号化 (点ごとの全結合と,
+  点の並びに依らない最大値のまとめ) と全結合の復号.
+  多視点の撮影は学習のコードで深度から点に戻して渡す (画像は読まない.
+  観測から形を補う比べる相手の基準).
+  出す点の数は decode2 の out_features (点の数 × 3) と cloud の shape で
+  合わせる.
+  学習の step で予測と正解の点群の Chamfer 距離を計算する
+inputs:
+  observed: {shape: [4, 512, 3], ui: {x: 0, y: 100}}
+nodes:
+  # 点ごとの特徴 (3 → 64 → 128. 全結合は最後の次元にかかる)
+  encode1:
+    unit: nn.Linear
+    params: {in_features: 3, out_features: 64}
+    inputs: observed
+    ui: {x: 220, y: 100}
+  encode1_act:
+    unit: nn.ReLU
+    inputs: encode1
+    ui: {x: 470, y: 100}
+  encode2:
+    unit: nn.Linear
+    params: {in_features: 64, out_features: 128}
+    inputs: encode1_act
+    ui: {x: 720, y: 100}
+  encode2_act:
+    unit: nn.ReLU
+    inputs: encode2
+    ui: {x: 970, y: 100}
+  encode3:
+    unit: nn.Linear
+    params: {in_features: 128, out_features: 256}
+    inputs: encode2_act
+    ui: {x: 1220, y: 100}
+  # 点の次元の最大値 (点の並びと数に依らない形の特徴)
+  pool:
+    unit: op.Max
+    params: {dim: 1}
+    inputs: encode3
+    ui: {x: 1470, y: 100}
+  # 形の特徴から点の座標への復号 (256 → 512 → 256 点 × 3)
+  decode1:
+    unit: nn.Linear
+    params: {in_features: 256, out_features: 512}
+    inputs: pool
+    ui: {x: 1720, y: 100}
+  decode1_act:
+    unit: nn.ReLU
+    inputs: decode1
+    ui: {x: 1970, y: 100}
+  decode2:
+    unit: nn.Linear
+    params: {in_features: 512, out_features: 768}
+    inputs: decode1_act
+    ui: {x: 2220, y: 100}
+  cloud:
+    unit: op.Reshape
+    params: {shape: [256, 3]}
+    inputs: decode2
+    ui: {x: 2470, y: 100}
+outputs:
+  cloud: cloud
+ui:
+  outputs:
+    cloud: {x: 2720, y: 120}

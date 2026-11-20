@@ -198,7 +198,7 @@ nodes:
 | 出どころ | 名前の形 | 中身 |
 | --- | --- | --- |
 | `torch.nn` | `nn.<クラス名>` | `torch.nn` の層. 引数と入力の口はシグネチャから取り出し, よく使うものには説明と範囲を付ける (入れ物, 損失関数, 遅延初期化の `Lazy*` は除く) |
-| 演算 | `op.<名前>` | `Add`, `Multiply`, `Concat`, `Stack`, `Reshape`, `Permute`, `Transpose`, `Mean`, `Select` (タプルの要素), `GetAttr` (出力の属性), `Index` (テンソルの決めた次元の 1 つ. 先頭のトークンなど), `Positions` (位置の番号. 位置の埋め込みの入力), `Equal` (等しい所の印. 詰め物から注意の印), `Exp` (指数), `Scale` (定数倍), `Chunk` (等分した何番目か. VAE の平均と対数分散など), `L2Normalize` (L2 正規化), `MatMul` (行列の積), `Detach` (勾配の切り離し), `SinusoidalEmbedding` (正弦波の時刻の埋め込み. 拡散の時刻), `Reparameterize` (平均と対数分散から潜在変数を引く. VAE. 評価の形 (`eval()`) では既定で平均を返す) など. `torch.nn.functional` は使わず, 全てモジュールとして作る |
+| 演算 | `op.<名前>` | `Add`, `Multiply`, `Concat`, `Stack`, `Reshape`, `Permute`, `Transpose`, `Mean`, `Max` (決めた次元の最大値. 点の並びに依らない点群のまとめ), `Select` (タプルの要素), `GetAttr` (出力の属性), `Index` (テンソルの決めた次元の 1 つ. 先頭のトークンなど), `Positions` (位置の番号. 位置の埋め込みの入力), `Equal` (等しい所の印. 詰め物から注意の印), `Exp` (指数), `Scale` (定数倍), `Chunk` (等分した何番目か. VAE の平均と対数分散など), `L2Normalize` (L2 正規化), `MatMul` (行列の積), `Detach` (勾配の切り離し), `SinusoidalEmbedding` (正弦波の時刻の埋め込み. 拡散の時刻), `Reparameterize` (平均と対数分散から潜在変数を引く. VAE. 評価の形 (`eval()`) では既定で平均を返す) など. `torch.nn.functional` は使わず, 全てモジュールとして作る |
 | PyTorch Geometric | `pyg.<クラス名>` | `torch_geometric.nn` の畳み込みの層と集約の層. ライブラリが入っている場合だけ使える |
 | Hugging Face | `hf.AutoModel`, `hf.AutoModelForImageClassification` など | モデルの名前 (またはローカルのパス) から読み込む. 文 (`input_ids`) を受け取る種類と画像 (`pixel_values`) を受け取る種類がある. 重みを読むか, 設定だけから作るかを選べる. ライブラリが入っている場合だけ使える |
 | torchvision | `tv.<クラス名>`, `tv.Model` | `torchvision.ops` の層 (`DeformConv2d`, `SqueezeExcitation`, `StochasticDepth` など) と, 名前で作るモデル (`tv.Model`. `resnet18` などを `torchvision.models.get_model` で作る) |
@@ -285,4 +285,7 @@ nodes:
 部品の登録簿と定義から組み立てる仕組みは課題の型 (受け持ちの分け方) に依らない. 型ごとに要る形は, 演算, 受け持ちごとの雛形, 一部の計算 (`GraphModel.compute`), 定義の版 2 (「パラメータの状態」), 自作の部品のモジュールで書く.
 
 - 受け持ちごとの雛形 (同梱の例 `vae`, `gan_generator`, `gan_discriminator`, `diffusion_denoiser`, `contrastive_encoder`, `two_tower_retrieval`, `policy_value`) は 1 回の順伝播だけを持ち, 損失, 更新の順, 雑音の加え方や環境との行き来は学習のスクリプトに残す. そのため, 損失に要る値 (VAE の平均と対数分散など) を出力に出し, 説明に学習の step で行うことを書く. GAN は 2 つの最適化手法で交互に学習するので, 生成器と識別器を別の定義にする. 対照学習は 2 通りの拡張をバッチの次元に並べて 1 つの符号化器に通す (共有を書かずに済み, 版 1 のまま読める)
+- 画像の領域の分割と点群の例 (`unet_segmentation`, `point_cloud_predictor`) は, 問題の設定が書き出す学習のスクリプト (ML-Quest の骨組み) の仮のモデルと同じ入力と出力を持ち, 学習のスクリプトの `model.spec` に置けばそのまま差し替えられる. 領域は (バッチ, チャンネル, 高さ, 幅) の 0 から 1 の画像から (バッチ, クラス数, 高さ, 幅) の画素ごとのスコア (損失は画素ごとの交差エントロピー). 点群は (バッチ, 入力の点の数, 3) の座標から (バッチ, 出す点の数, 3) の座標 (損失は Chamfer 距離)
+    - `unet_segmentation` は 2 段の U-Net (縮める側の畳み込みと最大値プーリング, 広げる側の転置畳み込みと, 同じ大きさの縮める側の特徴との連結). 高さと幅は 4 の倍数にする (2 回半分にして戻すため). 入力のチャンネル数 (`enc1a` の `in_channels`) とクラス数 (`head` の `out_channels`. 背景を含む) はデータに合わせて書き換える
+    - `point_cloud_predictor` は PointNet の形の符号化 (点ごとの全結合と, 点の並びに依らない最大値のまとめ) と全結合の復号で, 決まった数の点を出す. 多視点の撮影 (画像, 姿勢, 深度) は学習のスクリプトが深度から点に戻して渡す (骨組みの `backproject`) ので, 画像そのものは読まない. 観測の点から形を補う比べる相手の基準で, 撮影の画像から形を推し量るモデルではない. 出す点の数を変える場合は `decode2` の `out_features` (点の数 × 3) と `cloud` の `shape` をそろえて書き換える
 - 出力の口は部品ごとに決まっていて引数では増やせないので, 分割 (`op.Chunk`) は名前を付けた複数の口ではなく, 等分した何番目かを 1 つ取り出す部品
