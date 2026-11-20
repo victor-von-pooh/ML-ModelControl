@@ -1,6 +1,6 @@
 # コーディングスタイル
 
-ML-ModelControl のコードを書くときの基準をまとめる (ML-Found の基準と同じ).
+ML-ModelControl のコードを書くときの基準をまとめる.
 
 ## 判断の優先順位
 
@@ -17,7 +17,7 @@ ML-ModelControl のコードを書くときの基準をまとめる (ML-Found �
 `.py` とノートブックの両方を数える.
 件数の合計で数えると, ファイルの多いリポジトリだけで結果が決まってしまうため使わない.
 
-2 で決めた場合は, 決めた書き方を下の「多数派で決めた項目」に足す.
+2 で決めた書き方は, このファイルのルールに書き足す.
 
 ## 明示的なルール
 
@@ -83,19 +83,3 @@ def get_device(device: str = "auto") -> torch.device:
 - import は「標準ライブラリ / サードパーティ / ローカル」の 3 グループに分け, 絶対 import で書く
 - PyTorch は `import torch` と `from torch import nn, optim` で読み込み, `torch.optim.lr_scheduler` は `optim.lr_scheduler.StepLR` のように `optim` から辿る
 - エラーは `raise ValueError("日本語のメッセージ")` のように出す
-
-## 多数派で決めた項目
-
-参考リポジトリの多数派で決めた書き方 (上のルールと重なるものを含む).
-
-- コメントの文末は体言止め
-- `Parameters` と `Returns` の下線は 10 本
-- 戻り値が無い関数にも `Returns` を書き, 引数が無い関数にも `Parameters` を書く
-- 既定値のある引数は docstring に `= 既定値` を書く
-- `return` には式ではなく変数名を書く
-- docstring の 1 行目は「〜関数」で終える
-- クラスと `__init__` には docstring を書かない
-- `__init__` の戻り値には型ヒントを付けない
-- コメントの読点は「, 」
-- 損失関数は `nn.XxxLoss()` のモジュール版
-- PyTorch は `from torch import nn, optim` で読み込む (`from torch.xxx import` の形は使わない)

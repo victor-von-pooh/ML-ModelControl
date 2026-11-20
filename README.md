@@ -1,12 +1,16 @@
 # ML-ModelControl
 
-PyTorch (と互換のライブラリ) で作れるモデルの部品を登録簿として持ち, 部品をつないだ定義 (YAML か JSON) から `nn.Module` を組み立てるライブラリ.
+「機械学習を全て GUI 上で行う」うちの「モデルの作成・選定」の段階のライブラリ. モデルの部品を登録簿として持ち, 部品をつないだ定義から PyTorch の `nn.Module` を組み立てる. 画面のアプリ [ML-CreateArchitecture](https://github.com/victor-von-pooh/ML-CreateArchitecture) が使う.
+
+## できること
+
+PyTorch (と互換のライブラリ) で作れるモデルの部品を登録簿として持ち, 部品をつないだ定義 (YAML か JSON) から `nn.Module` を組み立てる.
 
 - `nn.Linear` のような層, 足し算や連結のような演算, PyTorch Geometric のグラフニューラルネットワークの層, Hugging Face の学習済みのモデルを, 同じ形の部品として扱う
 - 分岐と合流のあるモデル (残差のつなぎ方, 複数の入力と出力) を定義できる
-- 定義の確認 (部品の名前, 引数, つなぎ方) と, 各部品の出力の形とパラメータ数の推定を, 部品ごとの結果で返す. GUI で部品を組み立てるアプリ (ML-CreateArchitecture) はこれを使う
-
-設計の方針は [docs/DESIGN.md](docs/DESIGN.md) を参照.
+- 定義の確認 (部品の名前, 引数, つなぎ方) と, 各部品の出力の形とパラメータ数の推定を, 部品ごとの結果で返す
+- 学習済みのモデルを部品にして一部だけを学ぶ形 (凍結, 零初期化, 外部の重み, 共有) を定義に書ける
+- 定義から同じ計算をする Python のコードを書き出し, 学習済みの重みのライセンスを配布元から読む
 
 ## 導入
 
@@ -137,7 +141,7 @@ nodes:
 
 画面 (ML-CreateArchitecture) や推論のアプリで自作の部品を使う場合は, 部品をモジュールに宣言し, そのモジュールの名前をアプリの起動の設定に書く. アプリは起動のときに `register_units_from(["my_lab.units"])` で読み込み, `{"my_lab.units": ["my.Block", ...]}` のようにモジュールごとの部品の名前を返す. モジュールは `UNITS = [MyBlock, {"cls": MyPair, "name": "my.Pair", "outputs": ["a", "b"]}]` (クラスか `register_unit` の引数の辞書) か, `def register_units(register): register(MyBlock, name="my.Block")` の関数で部品を宣言する. 部品の一覧 (`describe_units`) の `module` に宣言したモジュールの名前が入る. 書いたモジュールは読み込んだときに任意のコードとして動くので, 信頼できるものだけを書く. モデルの定義に書かれた登録されていない名前からは何も読み込まず, 確認で「この部品 (...) は登録されていません. 自作の部品なら起動の設定に足してください」の誤りになる. 詳しくは docs/DESIGN.md の「自作の部品のモジュール」.
 
-## ML-Found で学習する
+### ML-Found で学習する
 
 組み立てたモデルは普通の `nn.Module` なので, PyTorch の学習の基盤 [ML-Found](https://github.com/victor-von-pooh/ML-Found) の `Trainer` にそのまま渡せる. 定義のファイルの置き場をプロジェクトの config に書き, 学習スクリプトで組み立てる. 定義のファイルは実験の出力先に写しておくと, 後から同じモデルを作って重みを読み込める.
 
@@ -246,16 +250,15 @@ model.load_state_dict(torch.load(f"{run_dir}/final_model.pt"))
 
 GUI のアプリと合わせて使う場合 (どちらも任意).
 
-- ML-CreateArchitecture (このライブラリの部品を画面で組み立てるアプリ) で保存した定義は, その置き場 (`~/.ml-createarchitecture/models/<名前>.yaml`) から, または画面の「YAML」のダウンロードで, プロジェクトの中に写して使う. 定義を直した場合は写し直す
+- ML-CreateArchitecture (このライブラリの部品を画面で組み立てるアプリ) で保存した定義は, アプリの保存先 (ML-CreateArchitecture の README) から, または画面の「YAML」のダウンロードで, プロジェクトの中に写して使う. 定義を直した場合は写し直す
 - [ML-Dashboard](https://github.com/victor-von-pooh/ML-Dashboard) (ML-Found の実験を見て, 学習を起動するアプリ) から起動する場合は, プロジェクトの仮想環境にこのライブラリも入れておく. 「同じ設定でもう一度」で起動し直す場合も, 上と同じく実行した時点のプロジェクトの定義のファイルから組み立てる
 
-## 開発
+## 文書
 
-```bash
-pytest
-```
-
-コードの書き方は [CODING_STYLE.md](CODING_STYLE.md) に従う.
+- [docs/DESIGN.md](docs/DESIGN.md): 今の設計と決まり, 他のリポジトリとの約束 (モデルの定義の形と版)
+- [TODO.md](TODO.md): まだやっていないこと (優先度の順)
+- [CODING_STYLE.md](CODING_STYLE.md): コードの書き方
+- [CLAUDE.md](CLAUDE.md): このリポジトリで作業するときの方針
 
 ## ライセンス
 
