@@ -20,7 +20,7 @@ PyTorch (と互換のライブラリ) で作れるモデルの部品を登録簿
 
 | 約束 | 持つか読むか | 版 | 使う側と中身 |
 | --- | --- | --- | --- |
-| モデルの定義 (YAML か JSON) | 持つ | `format_version` 2 (版 1 も読み, 版 2 の項目を使わない定義は版 1 で書く. 新しい版は誤りで止まる) | ML-CreateArchitecture (作る), 学習のスクリプト (ML-Quest の骨組みを含む), ML-Inference, ML-Provide (見本). 下の「モデルの定義の形」と「版」. 定義を作る側 (GUI か手書き) と使う側は, 主にこの形でつながる (コードとして持ち出す場合は Python に書き出せる) |
+| モデルの定義 (YAML か JSON) | 持つ | `format_version` 2 (版 1 も読み, 版 2 の項目を使わない定義は版 1 で書く. 新しい版は誤りで止まる) | ML-CreateArchitecture (作る), 学習のスクリプト (ML-Quest の骨組みを含む), ML-Found (中身を読まずに実験の出力先に写す), ML-Inference, ML-Provide (見本). 下の「モデルの定義の形」と「版」. 定義を作る側 (GUI か手書き) と使う側は, 主にこの形でつながる (コードとして持ち出す場合は Python に書き出せる) |
 | 部品の一覧 (`describe_units`) と確認の結果 (`validate`, `infer`) | 持つ | 版を持たない (JSON にできる辞書) | ML-CreateArchitecture. 下の「登録簿」と「確認, 形の推定, 組み立て」 |
 | 自作の部品のモジュール (`register_units_from`) | 持つ | 版を持たない | ML-CreateArchitecture の起動の設定, ML-Inference. 下の「自作の部品のモジュール」 |
 | 学習済みの重みのライセンス (`pretrained_info`) | 持つ | 版を持たない | ML-CreateArchitecture (警告), ML-Inference (一式に重みを写すか). 下の「学習済みの重みのライセンス」 |

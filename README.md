@@ -229,7 +229,7 @@ ML-Found のプロジェクト (`configs/default/train.yaml`, `configs/experimen
     history = trainer.fit(train_loader, valid_loader)
     ```
 
-`experiment.run_dir` は実験の出力先 (`Path`. プロジェクトのディレクトリの `outputs/<experiment.name>/<日付>/<時刻>/`). ML-Found は学習した重みを `state_dict` として `final_model.pt` に保存するので, 後から読み込む場合は, 写した定義で組み立ててから重みを読み込む. 写せなかった場合 (定義のファイルが無い, プロジェクトの外を指すなど) は `source.yaml` の `model_spec` の `status` が `copied` でなく, `model_spec.yaml` は無い.
+`experiment.run_dir` は実験の出力先 (`Path`. プロジェクトのディレクトリの `outputs/<experiment.name>/<日付>/<時刻>/`). ML-Found は学習した重みを `state_dict` として `final_model.pt` に保存するので, 後から読み込む場合は, `source.yaml` の `model_spec` の `status` が `copied` であることを確かめ, 写した定義で組み立ててから重みを読み込む. 写せなかった場合 (プロジェクトの外を指す, リンクなど) は `source.yaml` の `model_spec` の `status` が `copied` でなく, `model_spec.yaml` は無い.
 
 ```python
 # 後から読み込む (パスはプロジェクトのディレクトリから. 日時は実験ごとに違う)
@@ -249,7 +249,7 @@ model.load_state_dict(torch.load(f"{run_dir}/final_model.pt"))
 GUI のアプリと合わせて使う場合 (どちらも任意).
 
 - ML-CreateArchitecture (このライブラリの部品を画面で組み立てるアプリ) で保存した定義は, アプリの保存先 (ML-CreateArchitecture の README) から, または画面の「YAML」のダウンロードで, プロジェクトの中に写して使う. 定義を直した場合は写し直す
-- [ML-Dashboard](https://github.com/victor-von-pooh/ML-Dashboard) (ML-Found の実験を見て, 学習を起動するアプリ) から起動する場合は, プロジェクトの仮想環境にこのライブラリも入れておく. 「同じ設定でもう一度」で起動し直す場合も, 上と同じく実行した時点のプロジェクトの定義のファイルから組み立てる
+- [ML-Dashboard](https://github.com/victor-von-pooh/ML-Dashboard) (ML-Found の実験を見て, 学習を起動するアプリ) から起動する場合は, プロジェクトの仮想環境にこのライブラリも入れておく. 「この設定でもう一度起動」で起動し直す場合も, 上と同じく実行した時点のプロジェクトの定義のファイルから組み立てる
 
 ## 文書
 
