@@ -143,7 +143,7 @@ nodes:
 
 ### ML-Found で学習する
 
-組み立てたモデルは普通の `nn.Module` なので, PyTorch の学習の基盤 [ML-Found](https://github.com/victor-von-pooh/ML-Found) の `Trainer` にそのまま渡せる. 定義のファイルの置き場をプロジェクトの config に書き, 学習スクリプトで組み立てる. 定義のファイルは実験の出力先に写しておくと, 後から同じモデルを作って重みを読み込める.
+組み立てたモデルは普通の `nn.Module` なので, PyTorch の学習の基盤 [ML-Found](https://github.com/victor-von-pooh/ML-Found) の `Trainer` にそのまま渡せる. 定義のファイルの置き場をプロジェクトの config の `model.spec` に書き, 学習スクリプトで組み立てる. ML-Found は学習を始めるときに `model.spec` の定義を実験の出力先に `model_spec.yaml` として写し, 場所と中身の sha256 を `source.yaml` の `model_spec` に残す (ML-Found の docs/FORMAT.md). 後から同じモデルを作って重みを読み込める.
 
 ML-Found のプロジェクト (`configs/default/train.yaml`, `configs/experiment/train.yaml`, 学習スクリプトを持つディレクトリ) の作り方は, ML-Found の README の「使い方」にある. ここでは, その学習スクリプトでモデルの定義を使う部分を示す.
 
@@ -162,7 +162,7 @@ ML-Found のプロジェクト (`configs/default/train.yaml`, `configs/experimen
     dump_spec(load_example("mlp"), "models/mlp.yaml")  # 16 次元の入力から 3 クラス
     ```
 
-3. 定義の置き場を, プロジェクトの default の config にプロジェクト固有の項目として書く (ML-Found の config には, プロジェクト固有の項目を自由に足せる)
+3. 定義の置き場を, プロジェクトの default の config の `model.spec` に書く (ML-Found はこの項目の定義を実験の出力先に写す)
 
     ```yaml
     # configs/default/train.yaml
@@ -173,11 +173,10 @@ ML-Found のプロジェクト (`configs/default/train.yaml`, `configs/experimen
       spec: models/mlp.yaml    # プロジェクトのディレクトリからの相対パス
     ```
 
-4. 学習スクリプトで定義から組み立てて学習し, 定義を実験の出力先に写す
+4. 学習スクリプトで定義から組み立てて学習する
 
     ```python
     # train.py (プロジェクトのディレクトリに置く)
-    import shutil
     from pathlib import Path
 
     import torch
@@ -217,9 +216,8 @@ ML-Found のプロジェクト (`configs/default/train.yaml`, `configs/experimen
         ]
         raise SystemExit("形を計算できません\n" + "\n".join(errors))
 
-    # 実験を始め, 定義を実験の出力先に残す
+    # 実験を始める (ML-Found が定義を出力先の model_spec.yaml に写す)
     experiment = start_experiment(cfg, diff, str(PROJECT_DIR))
-    shutil.copy(spec_path, experiment.run_dir / "model_spec.yaml")
 
     # データ (ここでは乱数. 実際はプロジェクトのデータ)
     x = torch.randn(256, 16)
@@ -231,7 +229,7 @@ ML-Found のプロジェクト (`configs/default/train.yaml`, `configs/experimen
     history = trainer.fit(train_loader, valid_loader)
     ```
 
-`experiment.run_dir` は実験の出力先 (`Path`. プロジェクトのディレクトリの `outputs/<experiment.name>/<日付>/<時刻>/`). ML-Found は学習した重みを `state_dict` として `final_model.pt` に保存するので, 後から読み込む場合は, 写した定義で組み立ててから重みを読み込む.
+`experiment.run_dir` は実験の出力先 (`Path`. プロジェクトのディレクトリの `outputs/<experiment.name>/<日付>/<時刻>/`). ML-Found は学習した重みを `state_dict` として `final_model.pt` に保存するので, 後から読み込む場合は, 写した定義で組み立ててから重みを読み込む. 写せなかった場合 (定義のファイルが無い, プロジェクトの外を指すなど) は `source.yaml` の `model_spec` の `status` が `copied` でなく, `model_spec.yaml` は無い.
 
 ```python
 # 後から読み込む (パスはプロジェクトのディレクトリから. 日時は実験ごとに違う)
