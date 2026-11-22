@@ -20,7 +20,7 @@ PyTorch (と互換のライブラリ) で作れるモデルの部品を登録簿
 | --- | --- |
 | ML-CreateArchitecture (モデルの作成) | 部品の一覧 (`describe_units`), 定義の確認と形の推定 (`validate`, `infer`), 定義の読み書き, 同梱の例, 学習済みの重みのライセンスの警告 |
 | ML-Found の学習のスクリプト (ML-Quest の骨組みを含む) | 定義から `build_model` でモデルを組み立てる. ML-Found は定義を実験の出力先に写す |
-| ML-Inference, ML-Provide | 実験に写した定義から推論のモデルを組み立てる. 自作の部品は `register_units_from` で読む |
+| ML-Inference, ML-Provide | 実験に写した定義から推論のモデルを組み立てる. 自作の部品は `register_units_from` で読む. 学習済みの重みは `pretrained_info` で, 一式に写せるか (ライセンス) と重みの版を読む |
 
 ## 導入
 
