@@ -376,13 +376,13 @@ def register_class(
             if param.types == ["list"]:
                 param.types = ["list", "float"]
 
-    # 別の部品やテンソルを引数に取るクラスと, 辞書の入力を取るクラス
-    # (異種グラフの層など) は今は対象外
+    # 関数やテンソルを引数に取るクラスと, 辞書の入力を取るクラス
+    # (異種グラフの層など) は今は対象外 (部品の引数は定義に部品と引数を
+    # 書く)
     if needs_module(cls):
         spec.available = False
         spec.reason = (
-            "引数に別の部品 (nn.Module) かテンソルが必要なので, 今は定義から"
-            "作れません"
+            "引数に関数かテンソルが必要なので, 今は定義から作れません"
         )
     if any(port.name.endswith("_dict") for port in inputs):
         spec.available = False

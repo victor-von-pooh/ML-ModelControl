@@ -1,6 +1,6 @@
 import warnings
 from pathlib import Path
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 import pytest
 import torch
@@ -280,7 +280,16 @@ def test_needs_object() -> None:
             # 親クラスのコンストラクタを呼び出す
             super(Block, self).__init__()
 
-    assert needs_module(Block)
+    # 部品だけを受け取る引数は定義に部品と引数を書けるので作れるもの,
+    # 関数かテンソルだけを受け取る引数のクラスは作れないもの
+    assert not needs_module(Block)
+
+    class Gate(nn.Module):
+        def __init__(self, fn: Callable, mask: torch.Tensor):
+            # 親クラスのコンストラクタを呼び出す
+            super(Gate, self).__init__()
+
+    assert needs_module(Gate)
 
 
 def test_huggingface_image_units(tmp_path: Path) -> None:

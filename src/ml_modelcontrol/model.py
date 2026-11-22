@@ -4,6 +4,7 @@ from typing import Any, Optional, Union
 import torch
 from torch import nn
 
+from ml_modelcontrol.registry import get_unit
 from ml_modelcontrol.spec import load_spec, parse_ref
 from ml_modelcontrol.state import (
     LOAD_CONTEXT, load_node_weights, make_context, share_targets,
@@ -53,10 +54,18 @@ def to_arg(value: Any) -> Any:
     Returns
     ----------
     arg: Any
-        リストはタプルに (kernel_size などの組), それ以外はそのまま
+        リストはタプルに (kernel_size などの組), 部品の引数 (unit と
+        params の辞書) は作った部品に, それ以外はそのまま
     """
+    # 確かめ済みの定義で辞書の値は, 部品の引数だけ
     if isinstance(value, list):
         arg = tuple(to_arg(item) for item in value)
+    elif isinstance(value, dict):
+        params = {
+            key: to_arg(item)
+            for key, item in (value.get("params") or {}).items()
+        }
+        arg = get_unit(str(value["unit"])).builder(**params)
     else:
         arg = value
 

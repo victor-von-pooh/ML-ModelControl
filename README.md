@@ -147,6 +147,19 @@ nodes:
   head: {unit: nn.Linear, params: {in_features: 16, out_features: 3}, inputs: backbone, zero_init: true}
 ```
 
+`nn.TransformerEncoder` のように別の部品を引数に取るクラスは, その引数 (部品の一覧で種類 `unit`) に部品の名前と引数を書く (定義の版 3). `__init__` で作って渡すだけで, 入力の口にはならない. 書き方は [docs/DESIGN.md](docs/DESIGN.md) の「引数に書く部品」.
+
+```yaml
+format_version: 3
+nodes:
+  enc:
+    unit: nn.TransformerEncoder
+    params:
+      encoder_layer: {unit: nn.TransformerEncoderLayer, params: {d_model: 16, nhead: 4, batch_first: true}}
+      num_layers: 2
+    inputs: {src: x}
+```
+
 自作の部品は `register_unit(MyBlock, name="my.Block")` で登録すると, 定義の `unit` に書ける (`forward` が複数の値を返す場合は `outputs=["a", "b"]` で口の名前を付ける. 属性や辞書のキーで値を返す場合は `outputs={"logits": ["logits"], "last": ["hidden_states", -1]}` のように口ごとの取り出し方を書く. 引数の説明と範囲は `notes={"hidden": {"description": "中間の大きさ", "minimum": 1}}` のように付けられる. 名前の頭に組み込みの部品の頭 (`nn.`, `op.`, `sub.` など) は使えない).
 
 画面 (ML-CreateArchitecture) や推論のアプリで自作の部品を使う場合は, 部品をモジュールに宣言し, そのモジュールの名前をアプリの起動の設定に書く. アプリは起動のときに `register_units_from(["my_lab.units"])` で読み込み, `{"my_lab.units": ["my.Block", ...]}` のようにモジュールごとの部品の名前を返す. モジュールは `UNITS = [MyBlock, {"cls": MyPair, "name": "my.Pair", "outputs": ["a", "b"]}]` (クラスか `register_unit` の引数の辞書) か, `def register_units(register): register(MyBlock, name="my.Block")` の関数で部品を宣言する. 部品の一覧 (`describe_units`) の `module` に宣言したモジュールの名前が入る. 書いたモジュールは読み込んだときに任意のコードとして動くので, 信頼できるものだけを書く. モデルの定義に書かれた登録されていない名前からは何も読み込まず, 確認で「この部品 (...) は登録されていません. 自作の部品なら起動の設定に足してください」の誤りになる. 詳しくは docs/DESIGN.md の「自作の部品のモジュール」.

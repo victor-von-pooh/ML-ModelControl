@@ -586,11 +586,12 @@ def register_torch_unit(cls: type) -> UnitSpec:
             param.kind = "str"
             param.choices = list(choices)
 
-    # 別の部品を引数に取るクラス (TransformerEncoder など) は今は対象外
+    # 部品 (nn.Module) 以外に定義の値で書けない引数 (関数やテンソル) を
+    # 取るクラスは対象外 (部品の引数は定義に部品と引数を書く)
     if needs_module(cls):
         spec.available = False
         spec.reason = (
-            "引数に別の部品 (nn.Module) が必要なので, 今は定義から作れません"
+            "引数に関数かテンソルが必要なので, 今は定義から作れません"
         )
     register(spec)
 

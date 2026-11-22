@@ -861,7 +861,7 @@ def test_versions() -> None:
     # 同梱の例 (版 1) の読み込みと組み立て, 版 1 のままの保存
     for example in list_examples():
         spec = load_example(example["name"])
-        assert spec["format_version"] == 2
+        assert spec["format_version"] == 3
         assert yaml.safe_load(dump_spec(spec))["format_version"] == 1
     model = build_model(load_example("mlp"), seed=0)
     assert model.weights_report == []
@@ -884,8 +884,8 @@ def test_versions() -> None:
 
     # ライブラリより新しい版のはっきりした停止
     newer = mlp_spec()
-    newer["format_version"] = 3
-    with pytest.raises(ValueError, match="format_version 3 の定義は"):
+    newer["format_version"] = 4
+    with pytest.raises(ValueError, match="format_version 4 の定義は"):
         load_spec(newer)
 
 
