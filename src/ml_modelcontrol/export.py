@@ -9,7 +9,9 @@ from typing import Any, Optional, Union
 from ml_modelcontrol.model import SpecError, to_arg
 from ml_modelcontrol.spec import SUBGRAPH_PREFIX, load_spec, parse_ref
 from ml_modelcontrol.registry import UnitSpec, get_unit
-from ml_modelcontrol.validate import analyze, class_name_of, inner_units
+from ml_modelcontrol.validate import (
+    MAX_UNIT_DEPTH, analyze, class_name_of, inner_units
+)
 
 # 書き出すコードで変数の名前に使わない名前 (読み込むモジュールなど)
 RESERVED_VARS = {"self", "torch", "nn", "ops", "result", "_pick"}
@@ -679,7 +681,9 @@ def build_args(
     return args
 
 
-def part_code(value: dict, parts: list[str], renames: dict[str, str]) -> str:
+def part_code(
+    value: dict, parts: list[str], renames: dict[str, str], depth: int = 1
+) -> str:
     """
     引数に書いた部品を作る行を書き加え, その変数の名前を返す関数
 
@@ -691,17 +695,23 @@ def part_code(value: dict, parts: list[str], renames: dict[str, str]) -> str:
         部品を作る行 (その場で書き加える. 中の部品を先に)
     renames: dict[str, str]
         部品を作る式の名前の置き換え (書き写したクラス)
+    depth: int = 1
+        入れ子の深さ (ノードの引数に書いた部品は 1)
 
     Returns
     ----------
     var: str
         作った部品の変数の名前 (_part0 のような, 他の名前と重ならない名前)
     """
-    # 中の部品を先に作り, この部品を作る行を足す
+    # 中の部品を先に作り, この部品を作る行を足す (深さは確かめで上限の内)
+    if depth > MAX_UNIT_DEPTH:
+        raise ValueError(
+            f"引数の部品の入れ子が深すぎます ({MAX_UNIT_DEPTH} 段まで)"
+        )
     unit = get_unit(str(value["unit"]))
     args = [repr(item) for item in unit.code_args]
     args += [
-        f"{key}={part_code(item, parts, renames)}"
+        f"{key}={part_code(item, parts, renames, depth + 1)}"
         if isinstance(item, dict) else f"{key}={to_arg(item)!r}"
         for key, item in (value.get("params") or {}).items()
     ]

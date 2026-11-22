@@ -44,6 +44,12 @@ SpecLoader.add_implicit_resolver(
 )
 
 
+# 入れ子が深すぎて読めない定義の誤りの文
+DEEP_MESSAGE = (
+    "定義の入れ子が深すぎます (引数の部品は 10 段まで)"
+)
+
+
 def load_spec(source: Union[str, Path, dict]) -> dict:
     """
     モデルの定義を読み込む関数
@@ -59,8 +65,12 @@ def load_spec(source: Union[str, Path, dict]) -> dict:
         モデルの定義 (版を今の版に直したもの)
     """
     # 辞書はそのまま, ファイルは拡張子で JSON と YAML を読み分け
+    # (入れ子が深すぎて写せない辞書と読めないファイルは誤り)
     if isinstance(source, dict):
-        spec = copy.deepcopy(source)
+        try:
+            spec = copy.deepcopy(source)
+        except RecursionError as error:
+            raise ValueError(DEEP_MESSAGE) from error
     else:
         # パスの代わりに YAML の文字を渡した場合の案内
         if isinstance(source, str) and not Path(source).exists() and (
@@ -79,6 +89,8 @@ def load_spec(source: Union[str, Path, dict]) -> dict:
                 spec = yaml.load(text, Loader=SpecLoader)
         except (yaml.YAMLError, json.JSONDecodeError) as error:
             raise ValueError(f"{path} を読めません: {error}") from error
+        except RecursionError as error:
+            raise ValueError(f"{path} を読めません: {DEEP_MESSAGE}") from error
     if not isinstance(spec, dict):
         raise ValueError("モデルの定義は辞書 (YAML のマップ) にしてください")
     spec = migrate(spec)

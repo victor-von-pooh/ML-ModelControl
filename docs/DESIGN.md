@@ -178,6 +178,7 @@ nodes:
 - 部品を受け取る引数: `__init__` の型ヒントが `nn.Module` かその子のクラスだけ (`Optional` も) の引数. 登録簿では種類 `unit` で, 型ヒントが `torch.nn` の決まったクラスなら, その部品の名前を候補 (`suggestions`. `encoder_layer` は `nn.TransformerEncoderLayer`) に持つ. 型ヒントが関数 (`Callable`) かテンソルの引数は書けないので, 必須ならその部品は今も「使えない」
 - 値は `unit` (必須) と `params` (省略可) だけの辞書か, null (省略). `unit` は登録簿の使える部品で, `params` はノードの `params` と同じく確かめる (中の部品にも部品を受け取る引数があれば, 同じ形で入れ子に書ける). 部品を受け取る引数の辞書はノードの入力の口でもつなぎ先でもなく, ノードの部品を作るときに 1 回だけ作って渡す (`nn.TransformerEncoder` はそれを `num_layers` の数だけ写す. 重みは写した先のものだけで, `state_dict` のキーは `nodes.enc.layers.0.self_attn.in_proj_weight` のようになる)
 - 書けない部品: 部分モデル (`sub.<名前>`. 受け取るクラスが, 決まった引数で呼ぶため (`nn.TransformerEncoder` は層を `src_mask` などのキーワードで呼ぶ)), 使えない部品, 学習済みの重みを読む部品 (`weights_params` が空でないもの. ライセンスと形の推定の置き換えをノードごとに行うため. ノードにする). `weights` の `params` にも書けない (`invalid_weights`)
+- 入れ子は 10 段まで (ノードの引数に書いた部品が 1 段目). 11 段目と, 外側の部品を中に含む循環 (YAML の `&a` と `*a`) は, 他の確かめより前に `invalid_value` にしてそこから先をたどらない. 辞書を写せないほど深い定義は, 読めない定義 (`invalid_spec`) にする. 引数のリストの循環も `invalid_value`
 - 確かめの誤り: 形の違う値 (辞書でない, `unit` が無い, 知らない項目) と書けない部品は `invalid_value`, 登録されていない部品は `unknown_unit`, 使えない部品は `unavailable_unit`. 場所は `params.encoder_layer` (部品の名前の誤りは `params.encoder_layer.unit`), 中の部品の引数は `params.encoder_layer.params.nhead` のように続ける. 部品を受け取る引数でない引数に辞書を書けば, 今までどおり `invalid_value`
 - 形の推定は, 部品を作れないノードと同じく, 中の部品の誤りをそのノードの誤りにしてその先を止める. パラメータ数は写した後の重みで数える
 - 書き出すコード (`export_python`): `__init__` で, ノードの部品を作る前に引数の部品を変数 (`_part0` など. 中の部品から先に) に作り, ノードの部品を作る式に `encoder_layer=_part0` のように渡す. 読み込む行と書き写す演算のクラスには, 引数の部品のものも含める

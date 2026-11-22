@@ -338,3 +338,80 @@ def test_unit_param_nested_custom(residual: Any) -> None:
     assert issues_of(spec) == [
         ("invalid_weights", "weights.params.inner")
     ]
+
+
+def test_unit_param_depth_and_cycle(residual: Any) -> None:
+    """
+    深すぎる入れ子と循環する引数の部品を, 落ちずに誤りとして返すことを
+    確かめる関数
+
+    Parameters
+    ----------
+    residual: Any
+        自作の部品 test.Residual を登録するフィクスチャ
+
+    Returns
+    ----------
+    None
+    """
+    def nested(depth: int) -> dict:
+        """
+        test.Residual を depth 段重ねた定義を作る関数
+
+        Parameters
+        ----------
+        depth: int
+            入れ子の段の数
+
+        Returns
+        ----------
+        spec: dict
+            モデルの定義
+        """
+        value: dict = {"unit": "nn.Identity"}
+        for _ in range(depth - 1):
+            value = {"unit": "test.Residual", "params": {"inner": value}}
+        spec = {
+            "format_version": 3, "inputs": {"x": {"shape": [2, 3]}},
+            "nodes": {"res": {
+                "unit": "test.Residual", "params": {"inner": value},
+                "inputs": "x"
+            }},
+            "outputs": {"y": "res"}
+        }
+
+        return spec
+
+    # 10 段までは組み立てられ, 11 段目は深すぎる誤り (そこで止める)
+    assert issues_of(nested(10)) == []
+    build_model(nested(10))
+    location = ".".join(["params.inner"] * 11)
+    assert issues_of(nested(11)) == [("invalid_value", location)]
+    assert infer(nested(11))["nodes"]["res"]["status"] == "error"
+    assert issues_of(nested(50)) == [("invalid_value", location)]
+
+    # 写せないほど深い定義は, 読めない定義の誤り 1 件
+    issues = validate(nested(3000))
+    assert [issue["code"] for issue in issues] == ["invalid_spec"]
+    assert "深すぎます" in issues[0]["message"]
+
+    # YAML の &a と *a の循環は, 引数の部品でもリストでも誤り
+    spec = yaml.safe_load("""
+format_version: 3
+inputs: {x: {shape: [2, 3]}}
+nodes:
+  res:
+    unit: test.Residual
+    params: {inner: &a {unit: test.Residual, params: {inner: *a}}}
+    inputs: x
+  view:
+    unit: op.Reshape
+    params: {shape: &b [2, *b]}
+    inputs: x
+outputs: {y: res}
+""")
+    assert sorted(issues_of(spec)) == [
+        ("invalid_value", "params.inner.params.inner"),
+        ("invalid_value", "params.shape")
+    ]
+    assert infer(spec)["nodes"]["res"]["status"] == "error"

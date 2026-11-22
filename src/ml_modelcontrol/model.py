@@ -10,7 +10,7 @@ from ml_modelcontrol.state import (
     LOAD_CONTEXT, load_node_weights, make_context, share_targets,
     tie_parameter, zero_parameters
 )
-from ml_modelcontrol.validate import Analysis, analyze
+from ml_modelcontrol.validate import MAX_UNIT_DEPTH, Analysis, analyze
 
 
 class SpecError(ValueError):
@@ -42,7 +42,7 @@ class NodeBuildError(ValueError):
         self.error = error
 
 
-def to_arg(value: Any) -> Any:
+def to_arg(value: Any, depth: int = 0) -> Any:
     """
     定義の引数の値 (JSON の値) を, 部品に渡す値に直す関数
 
@@ -50,6 +50,9 @@ def to_arg(value: Any) -> Any:
     ----------
     value: Any
         定義に書いた値
+    depth: int = 0
+        引数の部品の入れ子の深さ (確かめていない値で限りなくたどらない
+        ように, 上限を超えたら止める)
 
     Returns
     ----------
@@ -58,11 +61,15 @@ def to_arg(value: Any) -> Any:
         params の辞書) は作った部品に, それ以外はそのまま
     """
     # 確かめ済みの定義で辞書の値は, 部品の引数だけ
+    if depth > MAX_UNIT_DEPTH:
+        raise ValueError(
+            f"引数の部品の入れ子が深すぎます ({MAX_UNIT_DEPTH} 段まで)"
+        )
     if isinstance(value, list):
-        arg = tuple(to_arg(item) for item in value)
+        arg = tuple(to_arg(item, depth) for item in value)
     elif isinstance(value, dict):
         params = {
-            key: to_arg(item)
+            key: to_arg(item, depth + 1)
             for key, item in (value.get("params") or {}).items()
         }
         arg = get_unit(str(value["unit"])).builder(**params)
