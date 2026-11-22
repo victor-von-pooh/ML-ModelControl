@@ -17,9 +17,32 @@ from ml_modelcontrol import pretrained
 # テストで返す Hugging Face のモデルの情報 (置き場の名前ごと)
 HUB = {
     "org/apache": {
-        "sha": "a" * 40, "gated": False,
+        "sha": "a" * 40, "gated": False, "author": "Org",
         "cardData": {"license": "apache-2.0"},
-        "tags": ["license:apache-2.0"]
+        "tags": ["license:apache-2.0"],
+        "siblings": [
+            {"rfilename": "config.json", "size": 10},
+            {"rfilename": "model.safetensors", "size": 440},
+            {"rfilename": "pytorch_model.bin", "size": 500},
+            {"rfilename": "sub/model.safetensors", "size": 7}
+        ]
+    },
+    "org/sharded": {
+        "sha": "6" * 40, "cardData": {"license": "cc-by-4.0"},
+        "siblings": [
+            {"rfilename": "model-00001-of-00002.safetensors", "size": 300},
+            {"rfilename": "model-00002-of-00002.safetensors",
+             "lfs": {"size": 200}},
+            {"rfilename": "model.safetensors.index.json", "size": 5}
+        ]
+    },
+    "org/bad-siblings": {
+        "sha": "7" * 40, "cardData": {"license": "mit"},
+        "siblings": [
+            "model.safetensors", {"rfilename": "model.safetensors"},
+            {"rfilename": "pytorch_model.bin", "size": True},
+            {"rfilename": 3, "size": 1}
+        ]
     },
     "org/noncommercial": {
         "sha": "b" * 40, "gated": False,
@@ -489,6 +512,7 @@ def test_fetch_hub_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
     request = requests[0]
     assert request.full_url == (
         "https://mirror.example/api/models/org/model/revision/refs%2Fpr%2F1"
+        "?blobs=true"
     )
     assert request.unredirected_hdrs["Authorization"] == (
         "Bearer secret-token"
@@ -881,3 +905,100 @@ def test_build_model_gated_message(
     assert caught.value.gated is not None
     assert caught.value.gated.reason == "no_token"
     assert "HF_TOKEN" in str(caught.value)
+
+
+def test_attribution_and_size() -> None:
+    """
+    表示の義務, 出どころの表記の例, 重みの大きさを返すことを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 1 つのファイル (ライブラリが読む順で safetensors を先. 下の
+    # ディレクトリのものは数えない)
+    info = hf_info("org/apache")
+    assert info["size_bytes"] == 440
+    assert info["author"] == "Org"
+    assert "NOTICE" in info["attribution"]
+    assert info["credit"] == (
+        f"Org の org/apache (版 {'a' * 12}), "
+        "https://huggingface.co/org/apache, ライセンス apache-2.0"
+    )
+
+    # 分けたファイルは合計 (LFS の大きさも読む). 作者が無ければ組織の名前
+    info = hf_info("org/sharded")
+    assert info["size_bytes"] == 500
+    assert "作者の名前" in info["attribution"]
+    assert info["credit"].startswith("org の org/sharded")
+
+    # 大きさの無い, 形の違う siblings と, 重みのファイルの無いもの
+    assert hf_info("org/bad-siblings")["size_bytes"] is None
+    assert hf_info("org/noncommercial")["size_bytes"] is None
+    assert "商用には使わない" in hf_info("org/noncommercial")["attribution"]
+
+
+def test_attribution_unknown() -> None:
+    """
+    表に無いライセンス, 複数のライセンス, 読めなかった重みの表示の義務を
+    確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 表に無いものと, 空のもの
+    unknown = pretrained.ATTRIBUTION_UNKNOWN
+    assert hf_info("org/other")["attribution"] == unknown
+    assert hf_info("org/empty")["attribution"] == unknown
+
+    # 複数はライセンスごと
+    text = hf_info("org/mixed")["attribution"]
+    assert text.startswith("apache-2.0: ")
+    assert " / cc-by-nc-4.0: " in text
+
+    # 読めなかったもの (置き場はあるので表記の例は残る)
+    info = hf_info("org/missing")
+    assert info["attribution"] == unknown
+    assert info["size_bytes"] is None
+    assert info["credit"] == (
+        "org の org/missing (版 main), https://huggingface.co/org/missing, "
+        "ライセンス 不明"
+    )
+
+    # 置き場の分からない重み
+    info = pretrained_info("tv.Model", {"name": "resnet18", "weights": "x"})
+    assert info is not None
+    assert info["credit"] is None and info["size_bytes"] is None
+    assert info["attribution"] == unknown
+
+
+def test_hub_weights_size() -> None:
+    """
+    外部の重み (hub) の大きさは書いたファイルの大きさになることを確かめる
+    関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    info = pretrained.hub_weights_info(
+        "org/apache", "main", filename="pytorch_model.bin"
+    )
+    assert info["size_bytes"] == 500
+    info = pretrained.hub_weights_info(
+        "org/apache", "main", filename="none.bin"
+    )
+    assert info["size_bytes"] is None
