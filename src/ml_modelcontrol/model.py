@@ -4,6 +4,7 @@ from typing import Any, Optional, Union
 import torch
 from torch import nn
 
+from ml_modelcontrol.pretrained import gated_error
 from ml_modelcontrol.registry import get_unit
 from ml_modelcontrol.spec import load_spec, parse_ref
 from ml_modelcontrol.state import (
@@ -32,14 +33,23 @@ class SpecError(ValueError):
 
 class NodeBuildError(ValueError):
     def __init__(self, node: str, error: Exception):
-        # 親クラスのコンストラクタを呼び出す
-        super(NodeBuildError, self).__init__(
-            f"ノード {node} の部品を作れません: {type(error).__name__}: {error}"
+        # 申請制の重みの読み込みの失敗は, 外部のライブラリの文の代わりに
+        # 理由と次にすることの文
+        gated = gated_error(error)
+        detail = (
+            str(gated) if gated is not None
+            else f"{type(error).__name__}: {error}"
         )
 
-        # 作れなかったノードの名前と元のエラーを保存
+        # 親クラスのコンストラクタを呼び出す
+        super(NodeBuildError, self).__init__(
+            f"ノード {node} の部品を作れません: {detail}"
+        )
+
+        # 作れなかったノードの名前, 元のエラー, 申請制の重みの誤りを保存
         self.node = node
         self.error = error
+        self.gated = gated
 
 
 def to_arg(value: Any, depth: int = 0) -> Any:
@@ -131,11 +141,12 @@ class GraphModel(nn.Module):
         self.nodes = nn.ModuleDict()
         for name in analysis.order:
             node = spec["nodes"][name]
-            params = {
-                key: to_arg(value)
-                for key, value in (node.get("params") or {}).items()
-            }
+            # 引数の部品も同じノードの誤りにする
             try:
+                params = {
+                    key: to_arg(value)
+                    for key, value in (node.get("params") or {}).items()
+                }
                 self.nodes[name] = analysis.units[name].builder(**params)
             except Exception as error:
                 raise NodeBuildError(name, error) from error

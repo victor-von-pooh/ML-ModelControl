@@ -65,6 +65,63 @@ LOCAL_SOURCE = (
     "配布元の情報が無い)"
 )
 
+# ライセンスの識別子の頭ごとの表示の義務 (長い頭を先に見る. 無いものは
+# 配布元の条件を原文で確かめる)
+ATTRIBUTION_TABLE = (
+    ("apache-2.0", (
+        "ライセンスの文と著作権の表示を添え, NOTICE のファイルがあれば"
+        "その中身も添える. 変えたファイルには変えたことを書く"
+    )),
+    ("cc-by-nc-nd", (
+        "作者の名前, 作品の名前, ライセンスへのリンクを表示する. 変えた"
+        "ものは配らず, 商用には使わない"
+    )),
+    ("cc-by-nc-sa", (
+        "作者の名前, 作品の名前, ライセンスへのリンク, 変えた場合はその"
+        "ことを表示し, 変えたものは同じライセンスで配る. 商用には使わない"
+    )),
+    ("cc-by-nc", (
+        "作者の名前, 作品の名前, ライセンスへのリンク, 変えた場合はその"
+        "ことを表示する. 商用には使わない"
+    )),
+    ("cc-by-sa", (
+        "作者の名前, 作品の名前, ライセンスへのリンク, 変えた場合はその"
+        "ことを表示し, 変えたものは同じライセンスで配る"
+    )),
+    ("cc-by-nd", (
+        "作者の名前, 作品の名前, ライセンスへのリンクを表示する. 変えた"
+        "ものは配らない"
+    )),
+    ("cc-by", (
+        "作者の名前, 作品の名前, ライセンスへのリンク, 変えた場合はその"
+        "ことを表示する"
+    )),
+    ("cc0", "表示の義務は無い (出どころを書くことを勧める)"),
+    ("unlicense", "表示の義務は無い (出どころを書くことを勧める)"),
+    ("mit", "ライセンスの文と著作権の表示を添える"),
+    ("bsd", "ライセンスの文と著作権の表示を添える"),
+    ("isc", "ライセンスの文と著作権の表示を添える"),
+    ("zlib", (
+        "配る元のものにライセンスの文を残し, 変えたものは元のものと"
+        "偽らない"
+    ))
+)
+
+# 表に無いライセンスと, 配布元の説明で確かめられなかった重みの表示の義務
+ATTRIBUTION_UNKNOWN = "配布元の条件を原文で確かめ, 求められる表示をする"
+
+# 重みの大きさを読むファイル (ライブラリが読む順. 分けたファイルは全ての
+# 合計)
+WEIGHT_FILES = (
+    re.compile(r"model\.safetensors"),
+    re.compile(r"model-\d+-of-\d+\.safetensors"),
+    re.compile(r"pytorch_model\.bin"),
+    re.compile(r"pytorch_model-\d+-of-\d+\.bin")
+)
+
+# 覚えるファイルの大きさの拡張子 (置き場の全てのファイルは覚えない)
+WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pth", ".pt", ".ckpt", ".npz")
+
 # 分類の厳しさの順 (複数のライセンスを持つ重みは最も厳しいもの)
 STATUS_ORDER = ("commercial", "unknown", "noncommercial")
 
@@ -100,6 +157,113 @@ CACHE_LOCK = threading.Lock()
 class HubError(Exception):
     # Hugging Face の情報を読めなかった理由 (画面に出す日本語)
     pass
+
+
+# 申請制の重みを読めなかった理由ごとの説明と次にすること
+GATED_TEXT = {
+    "no_token": (
+        "環境変数 HF_TOKEN (無ければ HUGGING_FACE_HUB_TOKEN) にトークンが"
+        "無い. 配布元のページで申請し, 通ったアカウントのトークンを "
+        "HF_TOKEN に設定してから, 起動し直して読み直す"
+    ),
+    "invalid_token": (
+        "環境変数 HF_TOKEN (無ければ HUGGING_FACE_HUB_TOKEN) のトークンが"
+        "無効. Hugging Face の設定のページでトークンを作り直して設定し, "
+        "起動し直して読み直す"
+    ),
+    "not_granted": (
+        "環境変数 HF_TOKEN (無ければ HUGGING_FACE_HUB_TOKEN) のトークンの"
+        "アカウントでは申請が通っていない (申請していないか, 審査の途中). "
+        "配布元のページで申請し, 通ってから読み直す"
+    )
+}
+
+
+# transformers が申請制の重みを読めなかった場合の文 (小文字)
+GATED_PHRASE = "trying to access a gated repo"
+
+
+class GatedWeightsError(ValueError):
+    def __init__(self, reason: str, hub_id: Optional[str]):
+        # 置き場の名前と配布元のページを添えた説明
+        self.reason = reason
+        self.hub_id = hub_id
+        self.url = f"{hub_endpoint()}/{hub_id}" if hub_id else None
+        where = (
+            f" (置き場 {hub_id}, 配布元のページ {self.url})" if hub_id else ""
+        )
+
+        # 親クラスのコンストラクタを呼び出す
+        super(GatedWeightsError, self).__init__(
+            f"申請制の重み{where}を読めません: {GATED_TEXT[reason]}"
+        )
+
+
+def gated_error(error: BaseException) -> Optional[GatedWeightsError]:
+    """
+    外部のライブラリの誤りが申請制の重みの読み込みの失敗なら, 理由と次に
+    することを添えた誤りに直す関数
+
+    Parameters
+    ----------
+    error: BaseException
+        重みの読み込みで起きた誤り (原因の誤りもたどる)
+
+    Returns
+    ----------
+    gated: Optional[GatedWeightsError]
+        申請制の重みの誤りなら理由 (no_token, invalid_token, not_granted)
+        と置き場の名前を持つ誤り, それ以外は None
+    """
+    # 原因の誤りをたどり, huggingface_hub の GatedRepoError か,
+    # transformers の申請制の文を探す (置き場が無いか非公開の誤りの文にも
+    # gated repo の語はあるので, 語だけでは見分けない)
+    found: Optional[BaseException] = None
+    seen: set[int] = set()
+    item: Optional[BaseException] = error
+    while item is not None and id(item) not in seen:
+        seen.add(id(item))
+        names = [cls.__name__ for cls in type(item).__mro__]
+        if isinstance(item, GatedWeightsError):
+            return item
+        if "GatedRepoError" in names or (
+            GATED_PHRASE in str(item).lower()
+        ):
+            found = item
+            break
+        item = item.__cause__ or item.__context__
+    if found is None:
+        return None
+
+    # 応答の番号 (401 はトークンが無いか無効, 403 は申請が通っていない) と
+    # トークンの有無で理由を決定
+    response = getattr(found, "response", None)
+    status = getattr(response, "status_code", None)
+    text = str(found)
+    if hub_token() is None:
+        reason = "no_token"
+    elif status == 403 or "authorized list" in text:
+        reason = "not_granted"
+    elif status == 401:
+        reason = "invalid_token"
+    else:
+        reason = "not_granted"
+
+    # 置き場の名前は誤りの repo_id (huggingface_hub が持つ場合) か, 誤りの
+    # 文の URL から (API とファイルの URL のどちらも)
+    hub_id = getattr(found, "repo_id", None)
+    if not isinstance(hub_id, str):
+        pattern = (
+            re.escape(hub_endpoint())
+            + r"/(?:api/models/)?([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?)"
+        )
+        match = re.search(pattern, text)
+        hub_id = match.group(1) if match else None
+    if hub_id is not None and not valid_hub_id(hub_id):
+        hub_id = None
+    gated = GatedWeightsError(reason, hub_id)
+
+    return gated
 
 
 def classify_license(license_id: Optional[str]) -> str:
@@ -248,12 +412,14 @@ def fetch_hub_metadata(hub_id: str, revision: str) -> dict:
     Returns
     ----------
     metadata: dict
-        API の JSON (cardData, tags, sha, gated などを持つ)
+        API の JSON (cardData, tags, sha, gated, author と, ファイルの
+        大きさ付きの siblings などを持つ)
     """
-    # 名前と版を URL の形にし, トークンがあれば添えて読み込み
+    # 名前と版を URL の形にし (ファイルの大きさも求める), トークンがあれば
+    # 添えて読み込み
     url = (
         f"{hub_endpoint()}/api/models/{urllib.parse.quote(hub_id)}"
-        f"/revision/{urllib.parse.quote(revision, safe='')}"
+        f"/revision/{urllib.parse.quote(revision, safe='')}?blobs=true"
     )
     request = urllib.request.Request(url)
     token = hub_token()
@@ -318,6 +484,78 @@ def licenses_from_metadata(metadata: dict) -> list[str]:
     return license_ids
 
 
+def files_from_metadata(metadata: dict) -> dict[str, int]:
+    """
+    Hugging Face のモデルの情報から重みのファイルの大きさを取り出す関数
+
+    Parameters
+    ----------
+    metadata: dict
+        API の JSON
+
+    Returns
+    ----------
+    files: dict[str, int]
+        重みの拡張子のファイルの, 置き場の中の名前ごとのバイト数 (大きさの
+        無いものは除く)
+    """
+    # siblings の rfilename と size (LFS のファイルは lfs.size もある)
+    files: dict[str, int] = {}
+    siblings = metadata.get("siblings")
+    for item in siblings if isinstance(siblings, list) else []:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("rfilename")
+        size = item.get("size")
+        lfs = item.get("lfs")
+        if not isinstance(size, int) and isinstance(lfs, dict):
+            size = lfs.get("size")
+        if (
+            isinstance(name, str) and name.endswith(WEIGHT_SUFFIXES)
+            and isinstance(size, int) and not isinstance(size, bool)
+            and size >= 0
+        ):
+            files[name] = size
+
+    return files
+
+
+def weight_size(
+    files: dict[str, int], filename: Optional[str] = None
+) -> Optional[int]:
+    """
+    読む重みのファイルの大きさを求める関数
+
+    Parameters
+    ----------
+    files: dict[str, int]
+        重みのファイルの名前ごとのバイト数
+    filename: Optional[str] = None
+        読むファイルの名前 (外部の重みの hub). None ならライブラリが読む
+        順 (WEIGHT_FILES) で最初に見つかったもの
+
+    Returns
+    ----------
+    size: Optional[int]
+        バイト数 (分けたファイルは合計), 分からなければ None
+    """
+    # 名前を決めた場合はそのファイル, それ以外は置き場の一番上で読む順
+    if filename is not None:
+        size = files.get(filename)
+        return size
+    size = None
+    for pattern in WEIGHT_FILES:
+        found = [
+            value for name, value in files.items()
+            if pattern.fullmatch(name)
+        ]
+        if found:
+            size = sum(found)
+            break
+
+    return size
+
+
 def read_hub(hub_id: str, revision: str, fetch: bool) -> dict:
     """
     Hugging Face のライセンス, コミット, 申請制かを, 覚えた結果か API から
@@ -335,7 +573,8 @@ def read_hub(hub_id: str, revision: str, fetch: bool) -> dict:
     Returns
     ----------
     result: dict
-        ok (読めたか), licenses, sha, gated, error (読めなかった理由)
+        ok (読めたか), licenses, sha, gated, author, files (重みの
+        ファイルの大きさ), error (読めなかった理由)
     """
     # 期限の内の覚えた結果があれば使用 (置き場の URL かトークンを変えたら
     # 読み直す. トークンそのものは覚えず hash だけ)
@@ -355,7 +594,7 @@ def read_hub(hub_id: str, revision: str, fetch: bool) -> dict:
     if not fetch or hub_offline():
         result = {
             "ok": False, "licenses": [], "sha": None, "gated": False,
-            "error": "ネットワークを使わない設定"
+            "author": None, "files": {}, "error": "ネットワークを使わない設定"
         }
         return result
 
@@ -363,15 +602,18 @@ def read_hub(hub_id: str, revision: str, fetch: bool) -> dict:
     try:
         metadata = fetch_hub_metadata(hub_id, revision)
         sha = metadata.get("sha")
+        author = metadata.get("author")
         result = {
             "ok": True, "licenses": licenses_from_metadata(metadata),
             "sha": sha if isinstance(sha, str) else None,
-            "gated": bool(metadata.get("gated")), "error": ""
+            "gated": bool(metadata.get("gated")),
+            "author": author if isinstance(author, str) and author else None,
+            "files": files_from_metadata(metadata), "error": ""
         }
     except HubError as error:
         result = {
             "ok": False, "licenses": [], "sha": None, "gated": False,
-            "error": str(error)
+            "author": None, "files": {}, "error": str(error)
         }
     with CACHE_LOCK:
         CACHE.pop(key, None)
@@ -455,16 +697,20 @@ def make_info(
         "revision": revision, "pinned_revision": None, "license": None,
         "licenses": [], "confirmed": False, "status": "unknown",
         "redistributable": False, "gated": False,
-        "alert": True, "message": "", "source": "",
+        "alert": True, "message": "", "source": "", "author": None,
+        "attribution": "", "credit": None, "size_bytes": None,
         "url": f"{hub_endpoint()}/{hub_id}" if hub_id else None
     }
 
     return info
 
 
-def fill_from_hub(info: dict, fetch: bool) -> bool:
+def fill_from_hub(
+    info: dict, fetch: bool, filename: Optional[str] = None
+) -> bool:
     """
-    Hugging Face の情報でライセンス, 版, 申請制かを埋める関数
+    Hugging Face の情報でライセンス, 版, 申請制か, 作者, 重みの大きさを
+    埋める関数
 
     Parameters
     ----------
@@ -472,6 +718,9 @@ def fill_from_hub(info: dict, fetch: bool) -> bool:
         hub_id と revision を持つ情報 (書き換える)
     fetch: bool
         ネットワークを使うか
+    filename: Optional[str] = None
+        読むファイルの名前 (外部の重みの hub. None ならライブラリが読む
+        ファイル)
 
     Returns
     ----------
@@ -495,6 +744,8 @@ def fill_from_hub(info: dict, fetch: bool) -> bool:
         info["confirmed"] = True
         info["pinned_revision"] = result["sha"]
         info["gated"] = result["gated"]
+        info["author"] = result["author"]
+        info["size_bytes"] = weight_size(result["files"], filename)
         info["source"] = (
             f"Hugging Face のモデルの説明から読んだ ({info['hub_id']})"
         )
@@ -739,6 +990,74 @@ def check_overrides(info: dict, params: dict) -> dict:
     return info
 
 
+def attribution_text(info: dict) -> str:
+    """
+    ライセンスが求める表示の義務の文を作る関数
+
+    Parameters
+    ----------
+    info: dict
+        licenses と confirmed を持つ情報
+
+    Returns
+    ----------
+    text: str
+        画面にそのまま出す表示の義務 (複数のライセンスはライセンスごと).
+        配布元の説明で確かめられなかったものと表に無いものは, 原文で確かめる
+        案内
+    """
+    # 識別子ごとに頭の表から引き, 同じ文はまとめる
+    if not info["confirmed"] or not info["licenses"]:
+        text = ATTRIBUTION_UNKNOWN
+        return text
+    parts: list[str] = []
+    for license_id in info["licenses"]:
+        key = license_id.strip().lower()
+        duty = next(
+            (value for prefix, value in ATTRIBUTION_TABLE
+             if key.startswith(prefix)),
+            ATTRIBUTION_UNKNOWN
+        )
+        parts.append(duty if len(info["licenses"]) == 1 else (
+            f"{license_id}: {duty}"
+        ))
+    text = " / ".join(dict.fromkeys(parts))
+
+    return text
+
+
+def credit_text(info: dict) -> Optional[str]:
+    """
+    出どころの表記の例を作る関数
+
+    Parameters
+    ----------
+    info: dict
+        hub_id, author, url, pinned_revision, license を持つ情報
+
+    Returns
+    ----------
+    credit: Optional[str]
+        作者, 置き場, 版, ページ, ライセンスを並べた表記の例. 置き場が
+        分からなければ None
+    """
+    # 作者が読めなければ置き場の組織の名前 (表記の例なので確かめは利用者)
+    hub_id = info["hub_id"]
+    if not hub_id or not info["url"]:
+        return None
+    author = info["author"] or (
+        hub_id.split("/")[0] if "/" in hub_id else None
+    )
+    revision = info["pinned_revision"] or info["revision"]
+    credit = (
+        (f"{author} の " if author else "") + f"{hub_id}"
+        + (f" (版 {revision[:12]})" if revision else "")
+        + f", {info['url']}, ライセンス {info['license'] or '不明'}"
+    )
+
+    return credit
+
+
 def finish_info(info: dict) -> dict:
     """
     読んだライセンスから分類, 再配布, 警告と説明を埋める関数
@@ -751,7 +1070,8 @@ def finish_info(info: dict) -> dict:
     Returns
     ----------
     info: dict
-        status, redistributable, alert, message を埋めた情報
+        status, redistributable, alert, message, attribution, credit を
+        埋めた情報
     """
     # 複数のライセンスは最も厳しいもの. 配布元の説明で確かめていないもの
     # (読めなかった) と申請制の重みは, ライセンスに依らず分からないもの
@@ -783,6 +1103,10 @@ def finish_info(info: dict) -> dict:
         message += ". 配布元のページで条件を確かめる"
     info["message"] = message
 
+    # 表示の義務と出どころの表記の例
+    info["attribution"] = attribution_text(info)
+    info["credit"] = credit_text(info)
+
     return info
 
 
@@ -809,8 +1133,8 @@ def pretrained_info(
     info: Optional[dict]
         ライセンスの情報 (unit, library, model, hub_id, revision,
         pinned_revision, license, licenses, confirmed, status,
-        redistributable, gated, alert, message, source, url), 重みを
-        読まない場合は None
+        redistributable, gated, alert, message, source, url, author,
+        attribution, credit, size_bytes), 重みを読まない場合は None
     """
     # 重みを読まない部品と引数の値では情報なし
     if params is not None and not isinstance(params, dict):
@@ -843,7 +1167,8 @@ def pretrained_info(
 
 
 def hub_weights_info(
-    hub_id: str, revision: str = "main", fetch: bool = True
+    hub_id: str, revision: str = "main", fetch: bool = True,
+    filename: Optional[str] = None
 ) -> dict:
     """
     Hugging Face の置き場から読む外部の重みのライセンスの情報を返す関数
@@ -859,6 +1184,9 @@ def hub_weights_info(
         版
     fetch: bool = True
         覚えた結果が無い場合にネットワークを使うか
+    filename: Optional[str] = None
+        読むファイルの名前 (size_bytes はこのファイルの大きさ. None なら
+        ライブラリが読むファイル)
 
     Returns
     ----------
@@ -867,7 +1195,7 @@ def hub_weights_info(
     """
     # 配布元の説明から読み, 分類と説明を付加
     info = make_info("huggingface", hub_id, hub_id, revision)
-    fill_from_hub(info, fetch)
+    fill_from_hub(info, fetch, filename)
     info["unit"] = None
     info = finish_info(info)
 

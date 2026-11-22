@@ -581,7 +581,7 @@ def read_source(
         )
         source = f"Hugging Face {written} (版 {revision})"
         license_info = hub_weights_info(
-            weights["hub"], revision, context.fetch
+            weights["hub"], revision, context.fetch, str(weights["file"])
         )
 
     # 学習済みの重みを読む部品 (ライセンスは pretrained_info)

@@ -17,9 +17,32 @@ from ml_modelcontrol import pretrained
 # テストで返す Hugging Face のモデルの情報 (置き場の名前ごと)
 HUB = {
     "org/apache": {
-        "sha": "a" * 40, "gated": False,
+        "sha": "a" * 40, "gated": False, "author": "Org",
         "cardData": {"license": "apache-2.0"},
-        "tags": ["license:apache-2.0"]
+        "tags": ["license:apache-2.0"],
+        "siblings": [
+            {"rfilename": "config.json", "size": 10},
+            {"rfilename": "model.safetensors", "size": 440},
+            {"rfilename": "pytorch_model.bin", "size": 500},
+            {"rfilename": "sub/model.safetensors", "size": 7}
+        ]
+    },
+    "org/sharded": {
+        "sha": "6" * 40, "cardData": {"license": "cc-by-4.0"},
+        "siblings": [
+            {"rfilename": "model-00001-of-00002.safetensors", "size": 300},
+            {"rfilename": "model-00002-of-00002.safetensors",
+             "lfs": {"size": 200}},
+            {"rfilename": "model.safetensors.index.json", "size": 5}
+        ]
+    },
+    "org/bad-siblings": {
+        "sha": "7" * 40, "cardData": {"license": "mit"},
+        "siblings": [
+            "model.safetensors", {"rfilename": "model.safetensors"},
+            {"rfilename": "pytorch_model.bin", "size": True},
+            {"rfilename": 3, "size": 1}
+        ]
     },
     "org/noncommercial": {
         "sha": "b" * 40, "gated": False,
@@ -489,6 +512,7 @@ def test_fetch_hub_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
     request = requests[0]
     assert request.full_url == (
         "https://mirror.example/api/models/org/model/revision/refs%2Fpr%2F1"
+        "?blobs=true"
     )
     assert request.unredirected_hdrs["Authorization"] == (
         "Bearer secret-token"
@@ -692,3 +716,289 @@ def test_override_params() -> None:
         {"confirmed": True, "source": "読んだ"}, {"checkpoint_path": ""}
     )
     assert unchanged["confirmed"] is True
+
+
+# huggingface_hub の申請制の誤りの代わり (同じ名前のクラスで見分ける)
+class GatedRepoError(OSError):
+    def __init__(self, message: str, status: int):
+        # 親クラスのコンストラクタを呼び出す
+        super(GatedRepoError, self).__init__(message)
+
+        # 応答の番号を持つ応答
+        self.response = type("Response", (), {"status_code": status})()
+
+
+# 申請制の置き場のファイルの URL を含む誤りの文
+GATED_TEXT = (
+    "Cannot access gated repo for url "
+    "https://huggingface.co/org/gated/resolve/main/config.json."
+)
+
+
+@pytest.mark.parametrize(
+    ("token", "status", "reason", "words"),
+    [
+        (None, 401, "no_token", ["トークンが無い", "申請"]),
+        ("hf_x", 401, "invalid_token", ["無効", "作り直して"]),
+        ("hf_x", 403, "not_granted", ["申請が通っていない"])
+    ]
+)
+def test_gated_error_reason(
+    monkeypatch: pytest.MonkeyPatch, token: Any, status: int, reason: str,
+    words: list[str]
+) -> None:
+    """
+    申請制の重みの誤りを, トークンの有無と応答の番号で理由に分け, 置き場の
+    名前と次にすることを添えることを確かめる関数
+
+    Parameters
+    ----------
+    monkeypatch: pytest.MonkeyPatch
+        差し替えの道具
+    token: Any
+        HF_TOKEN の値 (None は無し)
+    status: int
+        応答の番号
+    reason: str
+        期待する理由
+    words: list[str]
+        誤りの文に含む語
+
+    Returns
+    ----------
+    None
+    """
+    # 環境のトークンを消してから, 決めた値を設定
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    if token is not None:
+        monkeypatch.setenv("HF_TOKEN", token)
+    gated = pretrained.gated_error(GatedRepoError(GATED_TEXT, status))
+    assert gated is not None
+    assert gated.reason == reason
+    assert gated.hub_id == "org/gated"
+    assert gated.url == "https://huggingface.co/org/gated"
+    message = str(gated)
+    assert "申請制の重み" in message and "HF_TOKEN" in message
+    assert "https://huggingface.co/org/gated" in message
+    assert all(word in message for word in words)
+    assert token is None or token not in message
+
+
+def test_gated_error_follows_cause(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    transformers のように包み直した誤りでも, 原因をたどって申請制の誤りと
+    分かり, 関係の無い誤りは None になることを確かめる関数
+
+    Parameters
+    ----------
+    monkeypatch: pytest.MonkeyPatch
+        差し替えの道具
+
+    Returns
+    ----------
+    None
+    """
+    # 環境のトークンを消し, 原因の誤りに GatedRepoError を持つ OSError
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    try:
+        try:
+            raise GatedRepoError(GATED_TEXT, 401)
+        except GatedRepoError as error:
+            raise OSError("読めない") from error
+    except OSError as error:
+        wrapped = error
+    gated = pretrained.gated_error(wrapped)
+    assert gated is not None and gated.reason == "no_token"
+
+    # 文だけで申請制と分かる誤り (置き場の URL が無ければ名前は None)
+    gated = pretrained.gated_error(
+        OSError("You are trying to access a gated repo.")
+    )
+    assert gated is not None and gated.hub_id is None
+    assert "置き場" not in str(gated)
+
+    # 関係の無い誤り (置き場が無いか非公開の文も) と, 置き場でない URL
+    assert pretrained.gated_error(ValueError("形が違う")) is None
+    assert pretrained.gated_error(OSError(
+        "Repository Not Found. If you are trying to access a private or "
+        "gated repo, make sure you are authenticated."
+    )) is None
+    gated = pretrained.gated_error(GatedRepoError(
+        "gated repo https://huggingface.co/../x", 401
+    ))
+    assert gated is not None and gated.hub_id is None
+
+
+def test_build_model_gated_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    組み立てで申請制の重みを読めなかった場合に, 部品を作る場合も外部の
+    重みを取ってくる場合も, 案内を添えた日本語の誤りになることを確かめる
+    関数 (ネットワークは使わない)
+
+    Parameters
+    ----------
+    tmp_path: Path
+        pytest が用意する一時ディレクトリ
+    monkeypatch: pytest.MonkeyPatch
+        差し替えの道具
+
+    Returns
+    ----------
+    None
+    """
+    from ml_modelcontrol import build_model, get_unit, state
+    from ml_modelcontrol.model import NodeBuildError
+
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        """
+        申請制の誤りを出す関数
+
+        Parameters
+        ----------
+        *args: Any
+            引数
+        **kwargs: Any
+            キーワード引数
+
+        Returns
+        ----------
+        None
+        """
+        raise OSError("読めない") from GatedRepoError(GATED_TEXT, 403)
+
+    spec = {
+        "format_version": 2,
+        "inputs": {"x": {"shape": [2, 4]}},
+        "nodes": {
+            "fc": {
+                "unit": "nn.Linear",
+                "params": {"in_features": 4, "out_features": 4},
+                "inputs": "x"
+            }
+        },
+        "outputs": {"y": "fc"}
+    }
+
+    # 外部の重みを取ってくる場合 (トークンはあるが申請が通っていない)
+    monkeypatch.setenv("HF_TOKEN", "hf_x")
+    monkeypatch.setattr(state, "hub_download", refuse)
+    hub_spec = json.loads(json.dumps(spec))
+    hub_spec["nodes"]["fc"]["weights"] = {
+        "hub": "org/gated", "file": "model.bin"
+    }
+    with pytest.raises(NodeBuildError) as caught:
+        build_model(hub_spec, base_dir=tmp_path)
+    assert caught.value.gated is not None
+    assert caught.value.gated.reason == "not_granted"
+    assert "ノード fc の部品を作れません: 申請制の重み" in str(caught.value)
+    assert "OSError" not in str(caught.value)
+
+    # 部品を作る場合 (トークンが無い)
+    monkeypatch.delenv("HF_TOKEN")
+    monkeypatch.setattr(get_unit("nn.Linear"), "builder", refuse)
+    with pytest.raises(NodeBuildError) as caught:
+        build_model(spec)
+    assert caught.value.gated is not None
+    assert caught.value.gated.reason == "no_token"
+    assert "HF_TOKEN" in str(caught.value)
+
+
+def test_attribution_and_size() -> None:
+    """
+    表示の義務, 出どころの表記の例, 重みの大きさを返すことを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 1 つのファイル (ライブラリが読む順で safetensors を先. 下の
+    # ディレクトリのものは数えない)
+    info = hf_info("org/apache")
+    assert info["size_bytes"] == 440
+    assert info["author"] == "Org"
+    assert "NOTICE" in info["attribution"]
+    assert info["credit"] == (
+        f"Org の org/apache (版 {'a' * 12}), "
+        "https://huggingface.co/org/apache, ライセンス apache-2.0"
+    )
+
+    # 分けたファイルは合計 (LFS の大きさも読む). 作者が無ければ組織の名前
+    info = hf_info("org/sharded")
+    assert info["size_bytes"] == 500
+    assert "作者の名前" in info["attribution"]
+    assert info["credit"].startswith("org の org/sharded")
+
+    # 大きさの無い, 形の違う siblings と, 重みのファイルの無いもの
+    assert hf_info("org/bad-siblings")["size_bytes"] is None
+    assert hf_info("org/noncommercial")["size_bytes"] is None
+    assert "商用には使わない" in hf_info("org/noncommercial")["attribution"]
+
+
+def test_attribution_unknown() -> None:
+    """
+    表に無いライセンス, 複数のライセンス, 読めなかった重みの表示の義務を
+    確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 表に無いものと, 空のもの
+    unknown = pretrained.ATTRIBUTION_UNKNOWN
+    assert hf_info("org/other")["attribution"] == unknown
+    assert hf_info("org/empty")["attribution"] == unknown
+
+    # 複数はライセンスごと
+    text = hf_info("org/mixed")["attribution"]
+    assert text.startswith("apache-2.0: ")
+    assert " / cc-by-nc-4.0: " in text
+
+    # 読めなかったもの (置き場はあるので表記の例は残る)
+    info = hf_info("org/missing")
+    assert info["attribution"] == unknown
+    assert info["size_bytes"] is None
+    assert info["credit"] == (
+        "org の org/missing (版 main), https://huggingface.co/org/missing, "
+        "ライセンス 不明"
+    )
+
+    # 置き場の分からない重み
+    info = pretrained_info("tv.Model", {"name": "resnet18", "weights": "x"})
+    assert info is not None
+    assert info["credit"] is None and info["size_bytes"] is None
+    assert info["attribution"] == unknown
+
+
+def test_hub_weights_size() -> None:
+    """
+    外部の重み (hub) の大きさは書いたファイルの大きさになることを確かめる
+    関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    info = pretrained.hub_weights_info(
+        "org/apache", "main", filename="pytorch_model.bin"
+    )
+    assert info["size_bytes"] == 500
+    info = pretrained.hub_weights_info(
+        "org/apache", "main", filename="none.bin"
+    )
+    assert info["size_bytes"] is None
