@@ -365,7 +365,7 @@ def check_inputs(
     return names
 
 
-def is_json_value(value: Any) -> bool:
+def is_json_value(value: Any, depth: int = 0) -> bool:
     """
     値が JSON の値 (数, 文字, 真偽値, None と, それらのリスト) かを返す関数
 
@@ -373,6 +373,9 @@ def is_json_value(value: Any) -> bool:
     ----------
     value: Any
         値
+    depth: int = 0
+        リストの入れ子の深さ (深すぎるものと, YAML の &a と *a の循環は
+        JSON の値でないものとする)
 
     Returns
     ----------
@@ -381,7 +384,9 @@ def is_json_value(value: Any) -> bool:
     """
     # リストは中の値も確認, 無限大と非数は JSON に書けないので不可
     if isinstance(value, list):
-        plain = all(is_json_value(item) for item in value)
+        plain = depth < 100 and all(
+            is_json_value(item, depth + 1) for item in value
+        )
     elif isinstance(value, float):
         plain = math.isfinite(value)
     else:
@@ -477,7 +482,8 @@ def check_value(param: ParamSpec, value: Any) -> Optional[str]:
 
 def check_params(
     name: str, unit: UnitSpec, values: Any, field_name: str,
-    specs: list[ParamSpec], issues: list[Issue]
+    specs: list[ParamSpec], issues: list[Issue], depth: int = 0,
+    seen: tuple = ()
 ) -> None:
     """
     ノードの params か forward_params を確かめる関数
@@ -496,6 +502,10 @@ def check_params(
         部品の引数の定義
     issues: list[Issue]
         誤りを加えるリスト
+    depth: int = 0
+        引数に書いた部品の入れ子の深さ (ノードの引数は 0)
+    seen: tuple = ()
+        たどっている引数の部品の辞書の id (循環を見つけるため)
 
     Returns
     ----------
@@ -511,9 +521,11 @@ def check_params(
         ))
         return
 
-    # 書いた値ごとに, 名前, JSON の値, 種類と範囲を確認
+    # 書いた値ごとに, 名前, JSON の値 (部品の引数は部品と引数), 種類と
+    # 範囲を確認 (引数に書いた部品の引数の field_name は
+    # params.encoder_layer.params のような場所)
     by_name = {param.name: param for param in specs}
-    extra = unit.extra_params and field_name == "params"
+    extra = unit.extra_params and field_name != "forward_params"
     for key, value in values.items():
         location = f"{field_name}.{key}"
         if key not in by_name and not extra:
@@ -539,6 +551,11 @@ def check_params(
                 node=name, location=location
             ))
             continue
+        if key in by_name and by_name[key].kind == "unit":
+            check_unit_value(
+                name, by_name[key], value, location, issues, depth + 1, seen
+            )
+            continue
         if not is_json_value(value):
             issues.append(Issue(
                 "error", "invalid_value",
@@ -561,6 +578,158 @@ def check_params(
                 f"{unit.name} の必須の引数 {param.name} がありません",
                 node=name, location=f"{field_name}.{param.name}"
             ))
+
+
+# 引数に書く部品の項目と, 入れ子の深さの上限
+UNIT_VALUE_KEYS = {"unit", "params"}
+MAX_UNIT_DEPTH = 10
+
+
+def check_unit_value(
+    name: str, param: ParamSpec, value: Any, location: str,
+    issues: list[Issue], depth: int = 1, seen: tuple = ()
+) -> None:
+    """
+    部品の引数 (種類 unit) に書いた部品と引数を確かめる関数
+
+    Parameters
+    ----------
+    name: str
+        ノードの名前
+    param: ParamSpec
+        引数の定義
+    value: Any
+        書いた値 ({unit: 部品の名前, params: 引数} か null)
+    location: str
+        書いた場所 (params.encoder_layer など)
+    issues: list[Issue]
+        誤りを加えるリスト
+    depth: int = 1
+        入れ子の深さ (ノードの引数に書いた部品は 1)
+    seen: tuple = ()
+        たどっている外側の引数の部品の辞書の id
+
+    Returns
+    ----------
+    None
+    """
+    # null は省略 (必須の不足は呼び出し側)
+    if value is None:
+        return
+
+    # 他の確かめより前に, 深すぎる入れ子と循環 (YAML の &a と *a) を誤りに
+    # (中をたどると限りなく続くため)
+    if depth > MAX_UNIT_DEPTH or id(value) in seen:
+        reason = (
+            "が自分自身を含んでいます (循環)" if id(value) in seen
+            else f"の入れ子が深すぎます ({MAX_UNIT_DEPTH} 段まで)"
+        )
+        issues.append(Issue(
+            "error", "invalid_value", f"引数の部品{reason}", node=name,
+            location=location
+        ))
+        return
+    seen = (*seen, id(value))
+
+    # 形は unit と params の辞書
+    example = (param.suggestions or ["nn.LayerNorm"])[0]
+    if not isinstance(value, dict) or not isinstance(
+        value.get("unit"), str
+    ) or set(value) - UNIT_VALUE_KEYS:
+        issues.append(Issue(
+            "error", "invalid_value",
+            f"{param.name} は部品と引数の辞書 ({{unit: {example}, params: "
+            "{...}}) で書いてください", node=name, location=location
+        ))
+        return
+
+    # 部品は登録簿の使える部品 (部分モデルと, 学習済みの重みを読む部品は
+    # 不可)
+    unit_name = value["unit"]
+    if unit_name.startswith(SUBGRAPH_PREFIX):
+        issues.append(Issue(
+            "error", "invalid_value",
+            f"{param.name} に部分モデル ({unit_name}) は書けません. 引数の"
+            "部品は受け取るクラスが決まった形で呼ぶので, 登録簿の部品にして"
+            "ください", node=name, location=f"{location}.unit"
+        ))
+        return
+    try:
+        unit = get_unit(unit_name)
+    except KeyError:
+        issues.append(Issue(
+            "error", "unknown_unit",
+            unregistered_message(
+                unit_name, suggest(unit_name, unit_names())
+            ), node=name, location=f"{location}.unit"
+        ))
+        return
+    if not unit.available:
+        issues.append(Issue(
+            "error", "unavailable_unit",
+            f"部品 {unit.name} は使えません: {unit.reason}", node=name,
+            location=f"{location}.unit"
+        ))
+        return
+    if unit.offline:
+        issues.append(Issue(
+            "error", "invalid_value",
+            f"学習済みの重みを読む部品 {unit.name} は, 引数の部品にできません "
+            "(ノードにしてください)", node=name, location=f"{location}.unit"
+        ))
+        return
+
+    # 部品の引数 (中の部品の引数も同じく) と, 重みを読む引数
+    check_params(
+        name, unit, value.get("params"), f"{location}.params", unit.params,
+        issues, depth, seen
+    )
+    issues += [
+        Issue("error", "unsafe_param", message, node=name,
+              location=f"{location}.params.{key}")
+        for key, message in override_errors(value.get("params"))
+    ]
+
+
+def inner_units(
+    params: Any, depth: int = 0
+) -> list[tuple[str, UnitSpec]]:
+    """
+    ノードの引数に書いた部品を, 中の部品も含めて集める関数
+
+    Parameters
+    ----------
+    params: Any
+        ノードの params (確かめ済みのもの)
+    depth: int = 0
+        入れ子の深さ (ノードの引数は 0)
+
+    Returns
+    ----------
+    units: list[tuple[str, UnitSpec]]
+        引数の場所 (encoder_layer, encoder_layer.norm など) と部品の組.
+        中の部品を先に並べる
+    """
+    # 確かめ済みの引数で辞書の値は, 部品の引数だけ (深さは確かめで上限
+    # の内だが, 確かめていない定義で限りなくたどらないように止める)
+    units: list[tuple[str, UnitSpec]] = []
+    if depth >= MAX_UNIT_DEPTH:
+        raise ValueError(
+            f"引数の部品の入れ子が深すぎます ({MAX_UNIT_DEPTH} 段まで)"
+        )
+    if not isinstance(params, dict):
+        return units
+    for key, value in params.items():
+        if isinstance(value, dict) and "unit" in value:
+            units += [
+                (f"{key}.{place}", unit)
+                for place, unit in inner_units(
+                    value.get("params"), depth + 1
+                )
+            ]
+            units.append((str(key), get_unit(str(value["unit"]))))
+
+    return units
 
 
 def check_node(
@@ -917,6 +1086,14 @@ def check_weights(name: str, weights: Any, issues: list[Issue]) -> None:
         (f"weights.params.{key}", message)
         for key, message in override_errors(weights.get("params"))
     ]
+    # 外部の重みの部品の引数には, 部品 (版 3 の部品の引数) を書けない
+    if isinstance(weights.get("params"), dict):
+        errors += [
+            (f"weights.params.{key}", f"weights の params の {key} に部品は"
+             "書けません")
+            for key, value in weights["params"].items()
+            if isinstance(value, dict)
+        ]
     if "strict" in weights and not isinstance(weights["strict"], bool):
         errors.append(("weights.strict", "strict は true か false にして"
                        "ください"))

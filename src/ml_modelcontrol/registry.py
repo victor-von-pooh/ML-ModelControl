@@ -20,7 +20,8 @@ PORT_DEFAULTS = (None,)
 
 @dataclass
 class ParamSpec:
-    # 引数の名前, 種類 (int, float, bool, str, list, any), 既定値, 必須か
+    # 引数の名前, 種類 (int, float, bool, str, list, any と, 別の部品を
+    # 受け取る unit), 既定値, 必須か
     name: str
     kind: str = "any"
     default: Any = None
@@ -235,7 +236,11 @@ PARAM_DESCRIPTIONS = {
     "rd_divisor": "減らした後のチャンネル数を割り切れる数にする約数",
     "dim_out": "出力の次元の大きさ",
     "growth_rate": "層ごとに増やすチャンネル数 (DenseNet)",
-    "dropout_prob": "ドロップアウトの割合"
+    "dropout_prob": "ドロップアウトの割合",
+    "encoder_layer": "重ねるエンコーダーの 1 層 (部品と引数. num_layers の数"
+                     "だけ写す)",
+    "decoder_layer": "重ねるデコーダーの 1 層 (部品と引数. num_layers の数"
+                     "だけ写す)"
 }
 
 # 名前ごとの説明があっても, ライブラリによって意味が違うので docstring の
@@ -788,7 +793,11 @@ def choices_of(annotation: Any) -> Optional[list]:
 
 def needs_module(cls: type) -> bool:
     """
-    __init__ の引数に別の部品 (nn.Module や関数) が必要なクラスかを返す関数
+    __init__ の引数に, 定義に書けない値 (関数やテンソル) が必要なクラスかを
+    返す関数
+
+    部品 (nn.Module) だけを受け取る引数は, 定義に部品と引数を書けるので
+    含めない
 
     Parameters
     ----------
@@ -798,9 +807,9 @@ def needs_module(cls: type) -> bool:
     Returns
     ----------
     needed: bool
-        必須の引数の型ヒントが nn.Module か Callable なら True
+        必須の引数の型ヒントが関数 (Callable) かテンソルなら True
     """
-    # 既定値の無い引数の型ヒントを確認
+    # 既定値の無い引数の型ヒントを確認 (部品の引数 (unit) は定義に書ける)
     # 文字の型ヒント (from __future__ import annotations) の型への変換
     needed = False
     try:
@@ -815,10 +824,66 @@ def needs_module(cls: type) -> bool:
         annotation = hints.get(name, parameter.annotation)
         if isinstance(annotation, str):
             annotation = getattr(nn, annotation, annotation)
-        if needs_object(annotation):
+        if module_class(annotation) is None and needs_object(annotation):
             needed = True
 
     return needed
+
+
+def module_class(annotation: Any) -> Optional[type]:
+    """
+    型ヒントが部品 (nn.Module) だけを受け取る場合に, そのクラスを返す関数
+
+    Parameters
+    ----------
+    annotation: Any
+        型ヒント (Optional も可. torch.nn のクラスの名前の文字も読む)
+
+    Returns
+    ----------
+    cls: Optional[type]
+        nn.Module か, その子のクラス. 関数 (Callable), テンソル, 値を
+        受け取る型ヒントは None
+    """
+    # Optional は None を除いた型, 文字は torch.nn のクラスの名前として読む
+    if is_union(annotation):
+        options = [
+            option for option in get_args(annotation)
+            if option is not type(None)
+        ]
+        if len(options) != 1:
+            return None
+        annotation = options[0]
+    if isinstance(annotation, str):
+        annotation = getattr(nn, annotation.strip().strip("'\""), None)
+    cls = annotation if (
+        inspect.isclass(annotation) and issubclass(annotation, nn.Module)
+    ) else None
+
+    return cls
+
+
+def unit_suggestions(cls: type) -> Optional[list]:
+    """
+    部品の引数の型ヒントのクラスから, 値の部品の名前の候補を作る関数
+
+    Parameters
+    ----------
+    cls: type
+        型ヒントの nn.Module のクラス
+
+    Returns
+    ----------
+    suggestions: Optional[list]
+        torch.nn の決まったクラス (TransformerEncoderLayer など) なら
+        nn.<クラス名> の 1 つ, nn.Module そのものなどは None
+    """
+    name = cls.__name__
+    suggestions = [f"nn.{name}"] if (
+        cls is not nn.Module and getattr(nn, name, None) is cls
+    ) else None
+
+    return suggestions
 
 
 def needs_object(annotation: Any) -> bool:
@@ -923,6 +988,14 @@ def params_from_init(cls: type) -> tuple[list[ParamSpec], bool]:
         annotation = parameter.annotation
         if isinstance(annotation, str):
             annotation = hints.get(name, annotation)
+        # 部品だけを受け取る引数は, 定義に部品と引数を書く種類 (unit)
+        part = module_class(annotation)
+        if part is not None:
+            params.append(ParamSpec(
+                name=name, kind="unit", default=to_plain(default),
+                required=required, suggestions=unit_suggestions(part)
+            ))
+            continue
         kind = kind_of(annotation, parameter.default)
         params.append(ParamSpec(
             name=name, kind=kind, default=to_plain(default),

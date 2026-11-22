@@ -8,7 +8,10 @@ from typing import Any, Optional, Union
 
 from ml_modelcontrol.model import SpecError, to_arg
 from ml_modelcontrol.spec import SUBGRAPH_PREFIX, load_spec, parse_ref
-from ml_modelcontrol.validate import analyze, class_name_of
+from ml_modelcontrol.registry import UnitSpec, get_unit
+from ml_modelcontrol.validate import (
+    MAX_UNIT_DEPTH, analyze, class_name_of, inner_units
+)
 
 # 書き出すコードで変数の名前に使わない名前 (読み込むモジュールなど)
 RESERVED_VARS = {"self", "torch", "nn", "ops", "result", "_pick"}
@@ -154,9 +157,9 @@ def export_python(
     imported: dict[str, str] = {"nn": "torch.nn"}
     for _, graph, graph_analysis in graphs:
         for name in graph_analysis.order:
-            line = graph_analysis.units[name].code_import
-            if line and line not in imports:
-                imports.append(line)
+            for unit in node_units(graph, graph_analysis, name):
+                if unit.code_import and unit.code_import not in imports:
+                    imports.append(unit.code_import)
         check_names(graph, graph_analysis, names, imported)
 
     # モデルの名前は文字の値として書き, コードとして解釈されないようにする
@@ -184,6 +187,32 @@ def export_python(
         Path(path).write_text(code, encoding="utf-8")
 
     return code
+
+
+def node_units(spec: dict, analysis: Any, name: str) -> list[UnitSpec]:
+    """
+    ノードの部品と, 引数に書いた部品を並べる関数
+
+    Parameters
+    ----------
+    spec: dict
+        モデルの定義
+    analysis: Any
+        定義の解析の結果
+    name: str
+        ノードの名前
+
+    Returns
+    ----------
+    units: list[UnitSpec]
+        ノードの部品と, 引数に書いた部品 (中の部品も)
+    """
+    params = spec["nodes"][name].get("params")
+    units = [
+        analysis.units[name], *[unit for _, unit in inner_units(params)]
+    ]
+
+    return units
 
 
 def used_units(spec: dict, analysis: Any) -> set[str]:
@@ -301,36 +330,40 @@ def copy_own_classes(
     renames: dict[str, str] = {}
     used: set[str] = set()
     fallback: list[str] = []
-    for _, _, graph_analysis in graphs:
-        for name in graph_analysis.order:
-            unit = graph_analysis.units[name]
-            if unit.code_import not in OWN_IMPORTS:
-                continue
-            if unit.code_name in renames or unit.code_import in fallback:
-                continue
-            short = unit.code_name.split(".")[-1]
-            module = importlib.import_module(OWN_IMPORTS[unit.code_import])
-            try:
-                source = inspect.getsource(getattr(module, short))
-            except (OSError, TypeError):
-                warnings.warn(
-                    f"{unit.code_name} のクラスの中身を読めないので, 書き出す"
-                    "コードは ml_modelcontrol を読み込みます", stacklevel=3
-                )
-                fallback.append(unit.code_import)
-                continue
-            if short in class_names or short in bound:
-                raise ValueError(
-                    f"部品のクラス {short} の名前が, 書き出すクラスか読み込む"
-                    "クラスの名前と重なります. 名前を変えるか, "
-                    "standalone=False で書き出してください"
-                )
-            copied.append(source)
-            renames[unit.code_name] = short
-            used |= {
-                word for word in ("importlib", "torch", "Any", "Optional")
-                if re.search(rf"\b{word}\b", source)
-            }
+    units = [
+        unit
+        for _, graph, graph_analysis in graphs
+        for name in graph_analysis.order
+        for unit in node_units(graph, graph_analysis, name)
+    ]
+    for unit in units:
+        if unit.code_import not in OWN_IMPORTS:
+            continue
+        if unit.code_name in renames or unit.code_import in fallback:
+            continue
+        short = unit.code_name.split(".")[-1]
+        module = importlib.import_module(OWN_IMPORTS[unit.code_import])
+        try:
+            source = inspect.getsource(getattr(module, short))
+        except (OSError, TypeError):
+            warnings.warn(
+                f"{unit.code_name} のクラスの中身を読めないので, 書き出す"
+                "コードは ml_modelcontrol を読み込みます", stacklevel=3
+            )
+            fallback.append(unit.code_import)
+            continue
+        if short in class_names or short in bound:
+            raise ValueError(
+                f"部品のクラス {short} の名前が, 書き出すクラスか読み込む"
+                "クラスの名前と重なります. 名前を変えるか, "
+                "standalone=False で書き出してください"
+            )
+        copied.append(source)
+        renames[unit.code_name] = short
+        used |= {
+            word for word in ("importlib", "torch", "Any", "Optional")
+            if re.search(rf"\b{word}\b", source)
+        }
 
     # 書き写したクラスが使う名前と, 書き出すクラスの名前の重なりの確認
     overlap = used & set(class_names)
@@ -378,12 +411,22 @@ def class_code(
     lines: list[str]
         クラスの定義の行
     """
-    # 部品を作る行と, forward の行
+    # 引数に渡す部品を作る行 (中の部品から), ノードの部品を作る行と,
+    # forward の行
     lines = [
         f"class {class_name}(nn.Module):",
         "    def __init__(self):",
         "        # 親クラスのコンストラクタを呼び出す",
-        f"        super({class_name}, self).__init__()", "",
+        f"        super({class_name}, self).__init__()", ""
+    ]
+    parts: list[str] = []
+    args = {
+        name: build_args(spec, analysis, name, parts, renames or {})
+        for name in analysis.order
+    }
+    if parts:
+        lines += ["        # 引数に渡す部品の作成", *parts, ""]
+    lines += [
         "        # ノードの部品の作成",
         "        self.nodes = nn.ModuleDict({"
     ]
@@ -391,7 +434,7 @@ def class_code(
         code = analysis.units[name].code_name
         lines += wrap_call(
             f"            {name!r}: {(renames or {}).get(code, code)}(",
-            build_args(spec, analysis, name), "),", "            "
+            args[name], "),", "            "
         )
     lines.append("        })")
     lines += state_code(spec, analysis)
@@ -559,8 +602,11 @@ def check_names(
     # 読み込む名前 (nn, ops, 部品のクラス) と, 予約した変数の名前
     if imported is None:
         imported = {"nn": "torch.nn"}
-    for name in analysis.order:
-        unit = analysis.units[name]
+    units = [
+        unit for name in analysis.order
+        for unit in node_units(spec, analysis, name)
+    ]
+    for unit in units:
         code_name = unit.code_name.split(".")[0]
         if unit.source == "subgraph":
             continue
@@ -597,7 +643,10 @@ def check_names(
             )
 
 
-def build_args(spec: dict, analysis: Any, name: str) -> list[str]:
+def build_args(
+    spec: dict, analysis: Any, name: str, parts: list[str],
+    renames: dict[str, str]
+) -> list[str]:
     """
     1 つのノードの部品を作る式の引数を作る関数
 
@@ -609,6 +658,10 @@ def build_args(spec: dict, analysis: Any, name: str) -> list[str]:
         定義の解析の結果
     name: str
         ノードの名前
+    parts: list[str]
+        引数に渡す部品を作る行 (その場で書き加える)
+    renames: dict[str, str]
+        部品を作る式の名前の置き換え (書き写したクラス)
 
     Returns
     ----------
@@ -619,9 +672,54 @@ def build_args(spec: dict, analysis: Any, name: str) -> list[str]:
     unit = analysis.units[name]
     params = spec["nodes"][name].get("params") or {}
     args = [repr(value) for value in unit.code_args]
-    args += [f"{key}={to_arg(value)!r}" for key, value in params.items()]
+    args += [
+        f"{key}={part_code(value, parts, renames)}"
+        if isinstance(value, dict) else f"{key}={to_arg(value)!r}"
+        for key, value in params.items()
+    ]
 
     return args
+
+
+def part_code(
+    value: dict, parts: list[str], renames: dict[str, str], depth: int = 1
+) -> str:
+    """
+    引数に書いた部品を作る行を書き加え, その変数の名前を返す関数
+
+    Parameters
+    ----------
+    value: dict
+        部品の引数 (unit と params)
+    parts: list[str]
+        部品を作る行 (その場で書き加える. 中の部品を先に)
+    renames: dict[str, str]
+        部品を作る式の名前の置き換え (書き写したクラス)
+    depth: int = 1
+        入れ子の深さ (ノードの引数に書いた部品は 1)
+
+    Returns
+    ----------
+    var: str
+        作った部品の変数の名前 (_part0 のような, 他の名前と重ならない名前)
+    """
+    # 中の部品を先に作り, この部品を作る行を足す (深さは確かめで上限の内)
+    if depth > MAX_UNIT_DEPTH:
+        raise ValueError(
+            f"引数の部品の入れ子が深すぎます ({MAX_UNIT_DEPTH} 段まで)"
+        )
+    unit = get_unit(str(value["unit"]))
+    args = [repr(item) for item in unit.code_args]
+    args += [
+        f"{key}={part_code(item, parts, renames, depth + 1)}"
+        if isinstance(item, dict) else f"{key}={to_arg(item)!r}"
+        for key, item in (value.get("params") or {}).items()
+    ]
+    var = f"_part{sum(line.startswith('        _part') for line in parts)}"
+    code = renames.get(unit.code_name, unit.code_name)
+    parts += wrap_call(f"        {var} = {code}(", args, ")", "        ")
+
+    return var
 
 
 def wrap_call(

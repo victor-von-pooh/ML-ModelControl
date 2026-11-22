@@ -8,7 +8,7 @@ from typing import Any, Optional, Union
 import yaml
 
 # このライブラリが読める定義の版
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
 
 # 定義の一番上, 入力, ノードで書ける項目
 GRAPH_KEYS = {
@@ -44,6 +44,12 @@ SpecLoader.add_implicit_resolver(
 )
 
 
+# 入れ子が深すぎて読めない定義の誤りの文
+DEEP_MESSAGE = (
+    "定義の入れ子が深すぎます (引数の部品は 10 段まで)"
+)
+
+
 def load_spec(source: Union[str, Path, dict]) -> dict:
     """
     モデルの定義を読み込む関数
@@ -59,8 +65,12 @@ def load_spec(source: Union[str, Path, dict]) -> dict:
         モデルの定義 (版を今の版に直したもの)
     """
     # 辞書はそのまま, ファイルは拡張子で JSON と YAML を読み分け
+    # (入れ子が深すぎて写せない辞書と読めないファイルは誤り)
     if isinstance(source, dict):
-        spec = copy.deepcopy(source)
+        try:
+            spec = copy.deepcopy(source)
+        except RecursionError as error:
+            raise ValueError(DEEP_MESSAGE) from error
     else:
         # パスの代わりに YAML の文字を渡した場合の案内
         if isinstance(source, str) and not Path(source).exists() and (
@@ -79,6 +89,8 @@ def load_spec(source: Union[str, Path, dict]) -> dict:
                 spec = yaml.load(text, Loader=SpecLoader)
         except (yaml.YAMLError, json.JSONDecodeError) as error:
             raise ValueError(f"{path} を読めません: {error}") from error
+        except RecursionError as error:
+            raise ValueError(f"{path} を読めません: {DEEP_MESSAGE}") from error
     if not isinstance(spec, dict):
         raise ValueError("モデルの定義は辞書 (YAML のマップ) にしてください")
     spec = migrate(spec)
@@ -118,14 +130,14 @@ def migrate(spec: dict) -> dict:
             "してください"
         )
 
-    # 版 1 の定義に版 2 の項目があれば誤り (版を書かない定義も版 1)
-    if version < 2:
-        places = state_places(spec)
-        if places:
+    # 版 1 の定義に版 2 の項目, 版 2 までの定義に版 3 の項目 (部品の引数)
+    # があれば誤り (版を書かない定義も版 1)
+    for needed, places in ((2, state_places(spec)), (3, unit_places(spec))):
+        if version < needed and places:
             raise ValueError(
-                f"format_version {version} の定義に版 2 の項目 "
-                f"({', '.join(places[:5])}) があります. format_version: 2 に"
-                "してください"
+                f"format_version {version} の定義に版 {needed} の項目 "
+                f"({', '.join(places[:5])}) があります. format_version: "
+                f"{max(needed, lowest_version(spec))} にしてください"
             )
     spec["format_version"] = FORMAT_VERSION
 
@@ -169,6 +181,49 @@ def state_places(spec: dict) -> list[str]:
     return places
 
 
+def unit_places(spec: dict) -> list[str]:
+    """
+    定義の中の版 3 の項目 (引数に書いた部品) の場所を返す関数
+
+    ノードの params の値のうち unit を持つ辞書 ({unit: ..., params: ...})
+    を集める. 版 2 までの引数の値は JSON の値 (数, 文字, 真偽値, null と
+    そのリスト) だけで, 辞書は書けない (unit の無い辞書は確かめで誤り)
+
+    Parameters
+    ----------
+    spec: dict
+        モデルの定義 (部分モデルの中も見る)
+
+    Returns
+    ----------
+    places: list[str]
+        nodes.enc.params.encoder_layer のような場所
+    """
+    # 本体と部分モデルのノードごとに, 辞書の引数の値を集約
+    graphs = [("", spec)]
+    subgraphs = spec.get("subgraphs")
+    if isinstance(subgraphs, dict):
+        graphs += [
+            (f"subgraphs.{name}.", sub) for name, sub in subgraphs.items()
+        ]
+    places = []
+    for head, graph in graphs:
+        nodes = graph.get("nodes") if isinstance(graph, dict) else None
+        if not isinstance(nodes, dict):
+            continue
+        for name, node in nodes.items():
+            params = node.get("params") if isinstance(node, dict) else None
+            if not isinstance(params, dict):
+                continue
+            places += [
+                f"{head}nodes.{name}.params.{key}"
+                for key, value in params.items()
+                if isinstance(value, dict) and "unit" in value
+            ]
+
+    return places
+
+
 def lowest_version(spec: dict) -> int:
     """
     定義を書ける最も低い版を返す関数
@@ -181,9 +236,15 @@ def lowest_version(spec: dict) -> int:
     Returns
     ----------
     version: int
-        版 2 の項目を使えば 2, 使わなければ 1
+        版 3 の項目 (引数に書いた部品) を使えば 3, 版 2 の項目 (パラメータ
+        の状態) を使えば 2, どちらも使わなければ 1
     """
-    version = 2 if state_places(spec) else 1
+    if unit_places(spec):
+        version = 3
+    elif state_places(spec):
+        version = 2
+    else:
+        version = 1
 
     return version
 
@@ -193,7 +254,7 @@ def dump_spec(spec: dict, path: Optional[Union[str, Path]] = None) -> str:
     モデルの定義を YAML か JSON の文字にし, パスがあれば保存する関数
 
     一番上の項目は決まった順に並べ, ノードは書いた順のまま残す. 版は
-    書ける最も低い版にする (版 2 の項目を使わなければ 1)
+    書ける最も低い版にする (版 2 と版 3 の項目を使わなければ 1)
 
     Parameters
     ----------
@@ -207,8 +268,8 @@ def dump_spec(spec: dict, path: Optional[Union[str, Path]] = None) -> str:
     text: str
         保存した文字
     """
-    # 版は書ける最も低い版 (版 2 の項目を使わなければ, 版 1 だけを読む
-    # 古いライブラリでも読めるように 1)
+    # 版は書ける最も低い版 (版 2 と版 3 の項目を使わなければ, 版 1 だけを
+    # 読む古いライブラリでも読めるように 1)
     spec = dict(spec)
     spec["format_version"] = lowest_version(spec)
 
