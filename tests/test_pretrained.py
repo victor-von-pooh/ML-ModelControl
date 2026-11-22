@@ -744,6 +744,9 @@ def test_gated_error_reason(
     ----------
     None
     """
+    # 環境のトークンを消してから, 決めた値を設定
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
     if token is not None:
         monkeypatch.setenv("HF_TOKEN", token)
     gated = pretrained.gated_error(GatedRepoError(GATED_TEXT, status))
@@ -758,20 +761,23 @@ def test_gated_error_reason(
     assert token is None or token not in message
 
 
-def test_gated_error_follows_cause() -> None:
+def test_gated_error_follows_cause(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     transformers のように包み直した誤りでも, 原因をたどって申請制の誤りと
     分かり, 関係の無い誤りは None になることを確かめる関数
 
     Parameters
     ----------
-    None
+    monkeypatch: pytest.MonkeyPatch
+        差し替えの道具
 
     Returns
     ----------
     None
     """
-    # 原因の誤りに GatedRepoError を持つ OSError
+    # 環境のトークンを消し, 原因の誤りに GatedRepoError を持つ OSError
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
     try:
         try:
             raise GatedRepoError(GATED_TEXT, 401)
