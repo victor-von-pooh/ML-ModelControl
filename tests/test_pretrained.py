@@ -692,3 +692,186 @@ def test_override_params() -> None:
         {"confirmed": True, "source": "読んだ"}, {"checkpoint_path": ""}
     )
     assert unchanged["confirmed"] is True
+
+
+# huggingface_hub の申請制の誤りの代わり (同じ名前のクラスで見分ける)
+class GatedRepoError(OSError):
+    def __init__(self, message: str, status: int):
+        # 親クラスのコンストラクタを呼び出す
+        super(GatedRepoError, self).__init__(message)
+
+        # 応答の番号を持つ応答
+        self.response = type("Response", (), {"status_code": status})()
+
+
+# 申請制の置き場のファイルの URL を含む誤りの文
+GATED_TEXT = (
+    "Cannot access gated repo for url "
+    "https://huggingface.co/org/gated/resolve/main/config.json."
+)
+
+
+@pytest.mark.parametrize(
+    ("token", "status", "reason", "words"),
+    [
+        (None, 401, "no_token", ["トークンが無い", "申請"]),
+        ("hf_x", 401, "invalid_token", ["無効", "作り直して"]),
+        ("hf_x", 403, "not_granted", ["申請が通っていない"])
+    ]
+)
+def test_gated_error_reason(
+    monkeypatch: pytest.MonkeyPatch, token: Any, status: int, reason: str,
+    words: list[str]
+) -> None:
+    """
+    申請制の重みの誤りを, トークンの有無と応答の番号で理由に分け, 置き場の
+    名前と次にすることを添えることを確かめる関数
+
+    Parameters
+    ----------
+    monkeypatch: pytest.MonkeyPatch
+        差し替えの道具
+    token: Any
+        HF_TOKEN の値 (None は無し)
+    status: int
+        応答の番号
+    reason: str
+        期待する理由
+    words: list[str]
+        誤りの文に含む語
+
+    Returns
+    ----------
+    None
+    """
+    if token is not None:
+        monkeypatch.setenv("HF_TOKEN", token)
+    gated = pretrained.gated_error(GatedRepoError(GATED_TEXT, status))
+    assert gated is not None
+    assert gated.reason == reason
+    assert gated.hub_id == "org/gated"
+    assert gated.url == "https://huggingface.co/org/gated"
+    message = str(gated)
+    assert "申請制の重み" in message and "HF_TOKEN" in message
+    assert "https://huggingface.co/org/gated" in message
+    assert all(word in message for word in words)
+    assert token is None or token not in message
+
+
+def test_gated_error_follows_cause() -> None:
+    """
+    transformers のように包み直した誤りでも, 原因をたどって申請制の誤りと
+    分かり, 関係の無い誤りは None になることを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 原因の誤りに GatedRepoError を持つ OSError
+    try:
+        try:
+            raise GatedRepoError(GATED_TEXT, 401)
+        except GatedRepoError as error:
+            raise OSError("読めない") from error
+    except OSError as error:
+        wrapped = error
+    gated = pretrained.gated_error(wrapped)
+    assert gated is not None and gated.reason == "no_token"
+
+    # 文だけで申請制と分かる誤り (置き場の URL が無ければ名前は None)
+    gated = pretrained.gated_error(
+        OSError("You are trying to access a gated repo.")
+    )
+    assert gated is not None and gated.hub_id is None
+    assert "置き場" not in str(gated)
+
+    # 関係の無い誤り (置き場が無いか非公開の文も) と, 置き場でない URL
+    assert pretrained.gated_error(ValueError("形が違う")) is None
+    assert pretrained.gated_error(OSError(
+        "Repository Not Found. If you are trying to access a private or "
+        "gated repo, make sure you are authenticated."
+    )) is None
+    gated = pretrained.gated_error(GatedRepoError(
+        "gated repo https://huggingface.co/../x", 401
+    ))
+    assert gated is not None and gated.hub_id is None
+
+
+def test_build_model_gated_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    組み立てで申請制の重みを読めなかった場合に, 部品を作る場合も外部の
+    重みを取ってくる場合も, 案内を添えた日本語の誤りになることを確かめる
+    関数 (ネットワークは使わない)
+
+    Parameters
+    ----------
+    tmp_path: Path
+        pytest が用意する一時ディレクトリ
+    monkeypatch: pytest.MonkeyPatch
+        差し替えの道具
+
+    Returns
+    ----------
+    None
+    """
+    from ml_modelcontrol import build_model, get_unit, state
+    from ml_modelcontrol.model import NodeBuildError
+
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        """
+        申請制の誤りを出す関数
+
+        Parameters
+        ----------
+        *args: Any
+            引数
+        **kwargs: Any
+            キーワード引数
+
+        Returns
+        ----------
+        None
+        """
+        raise OSError("読めない") from GatedRepoError(GATED_TEXT, 403)
+
+    spec = {
+        "format_version": 2,
+        "inputs": {"x": {"shape": [2, 4]}},
+        "nodes": {
+            "fc": {
+                "unit": "nn.Linear",
+                "params": {"in_features": 4, "out_features": 4},
+                "inputs": "x"
+            }
+        },
+        "outputs": {"y": "fc"}
+    }
+
+    # 外部の重みを取ってくる場合 (トークンはあるが申請が通っていない)
+    monkeypatch.setenv("HF_TOKEN", "hf_x")
+    monkeypatch.setattr(state, "hub_download", refuse)
+    hub_spec = json.loads(json.dumps(spec))
+    hub_spec["nodes"]["fc"]["weights"] = {
+        "hub": "org/gated", "file": "model.bin"
+    }
+    with pytest.raises(NodeBuildError) as caught:
+        build_model(hub_spec, base_dir=tmp_path)
+    assert caught.value.gated is not None
+    assert caught.value.gated.reason == "not_granted"
+    assert "ノード fc の部品を作れません: 申請制の重み" in str(caught.value)
+    assert "OSError" not in str(caught.value)
+
+    # 部品を作る場合 (トークンが無い)
+    monkeypatch.delenv("HF_TOKEN")
+    monkeypatch.setattr(get_unit("nn.Linear"), "builder", refuse)
+    with pytest.raises(NodeBuildError) as caught:
+        build_model(spec)
+    assert caught.value.gated is not None
+    assert caught.value.gated.reason == "no_token"
+    assert "HF_TOKEN" in str(caught.value)

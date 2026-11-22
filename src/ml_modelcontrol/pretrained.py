@@ -102,6 +102,113 @@ class HubError(Exception):
     pass
 
 
+# 申請制の重みを読めなかった理由ごとの説明と次にすること
+GATED_TEXT = {
+    "no_token": (
+        "環境変数 HF_TOKEN (無ければ HUGGING_FACE_HUB_TOKEN) にトークンが"
+        "無い. 配布元のページで申請し, 通ったアカウントのトークンを "
+        "HF_TOKEN に設定してから, 起動し直して読み直す"
+    ),
+    "invalid_token": (
+        "環境変数 HF_TOKEN (無ければ HUGGING_FACE_HUB_TOKEN) のトークンが"
+        "無効. Hugging Face の設定のページでトークンを作り直して設定し, "
+        "起動し直して読み直す"
+    ),
+    "not_granted": (
+        "環境変数 HF_TOKEN (無ければ HUGGING_FACE_HUB_TOKEN) のトークンの"
+        "アカウントでは申請が通っていない (申請していないか, 審査の途中). "
+        "配布元のページで申請し, 通ってから読み直す"
+    )
+}
+
+
+# transformers が申請制の重みを読めなかった場合の文 (小文字)
+GATED_PHRASE = "trying to access a gated repo"
+
+
+class GatedWeightsError(ValueError):
+    def __init__(self, reason: str, hub_id: Optional[str]):
+        # 置き場の名前と配布元のページを添えた説明
+        self.reason = reason
+        self.hub_id = hub_id
+        self.url = f"{hub_endpoint()}/{hub_id}" if hub_id else None
+        where = (
+            f" (置き場 {hub_id}, 配布元のページ {self.url})" if hub_id else ""
+        )
+
+        # 親クラスのコンストラクタを呼び出す
+        super(GatedWeightsError, self).__init__(
+            f"申請制の重み{where}を読めません: {GATED_TEXT[reason]}"
+        )
+
+
+def gated_error(error: BaseException) -> Optional[GatedWeightsError]:
+    """
+    外部のライブラリの誤りが申請制の重みの読み込みの失敗なら, 理由と次に
+    することを添えた誤りに直す関数
+
+    Parameters
+    ----------
+    error: BaseException
+        重みの読み込みで起きた誤り (原因の誤りもたどる)
+
+    Returns
+    ----------
+    gated: Optional[GatedWeightsError]
+        申請制の重みの誤りなら理由 (no_token, invalid_token, not_granted)
+        と置き場の名前を持つ誤り, それ以外は None
+    """
+    # 原因の誤りをたどり, huggingface_hub の GatedRepoError か,
+    # transformers の申請制の文を探す (置き場が無いか非公開の誤りの文にも
+    # gated repo の語はあるので, 語だけでは見分けない)
+    found: Optional[BaseException] = None
+    seen: set[int] = set()
+    item: Optional[BaseException] = error
+    while item is not None and id(item) not in seen:
+        seen.add(id(item))
+        names = [cls.__name__ for cls in type(item).__mro__]
+        if isinstance(item, GatedWeightsError):
+            return item
+        if "GatedRepoError" in names or (
+            GATED_PHRASE in str(item).lower()
+        ):
+            found = item
+            break
+        item = item.__cause__ or item.__context__
+    if found is None:
+        return None
+
+    # 応答の番号 (401 はトークンが無いか無効, 403 は申請が通っていない) と
+    # トークンの有無で理由を決定
+    response = getattr(found, "response", None)
+    status = getattr(response, "status_code", None)
+    text = str(found)
+    if hub_token() is None:
+        reason = "no_token"
+    elif status == 403 or "authorized list" in text:
+        reason = "not_granted"
+    elif status == 401:
+        reason = "invalid_token"
+    else:
+        reason = "not_granted"
+
+    # 置き場の名前は誤りの repo_id (huggingface_hub が持つ場合) か, 誤りの
+    # 文の URL から (API とファイルの URL のどちらも)
+    hub_id = getattr(found, "repo_id", None)
+    if not isinstance(hub_id, str):
+        pattern = (
+            re.escape(hub_endpoint())
+            + r"/(?:api/models/)?([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?)"
+        )
+        match = re.search(pattern, text)
+        hub_id = match.group(1) if match else None
+    if hub_id is not None and not valid_hub_id(hub_id):
+        hub_id = None
+    gated = GatedWeightsError(reason, hub_id)
+
+    return gated
+
+
 def classify_license(license_id: Optional[str]) -> str:
     """
     ライセンスの識別子を, 商用で使えるかで分ける関数
