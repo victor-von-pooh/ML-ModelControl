@@ -1,6 +1,6 @@
 # ML-ModelControl
 
-「機械学習を全て GUI 上で行う」うちの「モデルの作成・選定」の段階のライブラリ. モデルの部品を登録簿として持ち, 部品をつないだ定義から PyTorch の `nn.Module` を組み立てる. 画面のアプリ [ML-CreateArchitecture](https://github.com/victor-von-pooh/ML-CreateArchitecture) が使う.
+「機械学習を全て GUI 上で行う」うちの「モデルの作成・選定」の段階のライブラリ. モデルの部品を登録簿として持ち, 部品をつないだ定義から PyTorch の `nn.Module` を組み立てる. 画面のアプリは [ML-CreateArchitecture](https://github.com/victor-von-pooh/ML-CreateArchitecture).
 
 ## できること
 
@@ -10,7 +10,17 @@ PyTorch (と互換のライブラリ) で作れるモデルの部品を登録簿
 - 分岐と合流のあるモデル (残差のつなぎ方, 複数の入力と出力) を定義できる
 - 定義の確認 (部品の名前, 引数, つなぎ方) と, 各部品の出力の形とパラメータ数の推定を, 部品ごとの結果で返す
 - 学習済みのモデルを部品にして一部だけを学ぶ形 (凍結, 零初期化, 外部の重み, 共有) を定義に書ける
+- 自作の部品を登録して定義に書ける. 保存した定義を別の定義の部品 (部分モデル) として使える
+- 全結合, CNN, LSTM, Transformer, BERT, GCN, U-Net, 点群, VAE, GAN, 拡散, 方策などの例の定義を同梱する (`list_examples`, `load_example`)
 - 定義から同じ計算をする Python のコードを書き出し, 学習済みの重みのライセンスを配布元から読む
+
+## どのアプリから使われるか
+
+| 相手 | 使うもの |
+| --- | --- |
+| ML-CreateArchitecture (モデルの作成) | 部品の一覧 (`describe_units`), 定義の確認と形の推定 (`validate`, `infer`), 定義の読み書き, 同梱の例, 学習済みの重みのライセンスの警告 |
+| ML-Found の学習のスクリプト (ML-Quest の骨組みを含む) | 定義から `build_model` でモデルを組み立てる. ML-Found は定義を実験の出力先に写す |
+| ML-Inference, ML-Provide | 実験に写した定義から推論のモデルを組み立てる. 自作の部品は `register_units_from` で読む |
 
 ## 導入
 
