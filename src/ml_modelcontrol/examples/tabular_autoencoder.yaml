@@ -1,0 +1,51 @@
+format_version: 1
+name: tabular_autoencoder
+description: >-
+  表の行の自己符号化器 (異常の検知): 行の特徴を全結合の層で縮めてから戻し,
+  入力と同じ幅の再構成を返す.
+  学習の step で正常の行だけを入れ, 再構成と入力の二乗誤差を損失にする.
+  異常の度合いは行ごとの再構成の誤差 (特徴の次元で平均した二乗誤差) で,
+  大きいほど異常とみなす.
+  入力の幅 (x の shape の 2 番目, enc1 の in_features, dec2 の
+  out_features) と縮めた幅 (enc2 の out_features, dec1 の in_features)
+  はデータに合わせて書き換える
+inputs:
+  # 前処理を済ませた行の特徴 (8 行 × 16 列)
+  x: {shape: [8, 16], ui: {x: 0, y: 100}}
+nodes:
+  # 符号化器 (16 → 8 → 縮めた幅の 4)
+  enc1:
+    unit: nn.Linear
+    params: {in_features: 16, out_features: 8}
+    inputs: x
+    ui: {x: 220, y: 80}
+  enc_act:
+    unit: nn.ReLU
+    inputs: enc1
+    ui: {x: 470, y: 80}
+  enc2:
+    unit: nn.Linear
+    params: {in_features: 8, out_features: 4}
+    inputs: enc_act
+    ui: {x: 720, y: 80}
+  # 復号器 (縮めた幅の 4 → 8 → 入力と同じ幅の 16)
+  dec1:
+    unit: nn.Linear
+    params: {in_features: 4, out_features: 8}
+    inputs: enc2
+    ui: {x: 970, y: 80}
+  dec_act:
+    unit: nn.ReLU
+    inputs: dec1
+    ui: {x: 1220, y: 80}
+  dec2:
+    unit: nn.Linear
+    params: {in_features: 8, out_features: 16}
+    inputs: dec_act
+    ui: {x: 1470, y: 80}
+# 再構成 (度合いと損失の計算に使う)
+outputs:
+  recon: dec2
+ui:
+  outputs:
+    recon: {x: 1720, y: 100}
