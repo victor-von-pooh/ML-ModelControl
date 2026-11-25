@@ -399,8 +399,8 @@ def test_segmentation_example() -> None:
         logits = model(torch.rand(2, 3, 48, 64))
     assert logits.shape == (2, 2, 48, 64)
 
-    # 骨組みと同じく, 画素ごとの交差エントロピーで学べる (勾配が入力の
-    # 最初の層まで届く)
+    # 骨組みと同じ画素ごとの交差エントロピーでの学習 (入力の最初の層まで
+    # 届く勾配)
     model.train()
     labels = torch.randint(0, 2, (2, 16, 16))
     loss = torch.nn.CrossEntropyLoss()(
@@ -438,7 +438,7 @@ def test_point_cloud_example() -> None:
     assert cloud.shape == (2, 256, 3)
     assert torch.allclose(cloud, shuffled, atol=1e-6)
 
-    # 骨組みと同じく Chamfer 距離で学べる (勾配が最初の層まで届く)
+    # 骨組みと同じ Chamfer 距離での学習 (最初の層まで届く勾配)
     model.train()
     target = torch.randn(2, 300, 3)
     pairs = torch.cdist(model(points), target) ** 2
@@ -475,9 +475,9 @@ def test_tabular_autoencoder_example() -> None:
     # 行ごとの異常の度合い (特徴の次元で平均した二乗誤差)
     scores = ((recon - rows) ** 2).mean(dim=1)
     assert scores.shape == (5,)
-    assert bool((scores >= 0).all())
+    assert bool(torch.isfinite(scores).all())
 
-    # 再構成の二乗誤差で学べる (勾配が最初の層まで届く)
+    # 再構成の二乗誤差での学習 (最初の層まで届く勾配)
     model.train()
     loss = nn.MSELoss()(model(rows), rows)
     loss.backward()
