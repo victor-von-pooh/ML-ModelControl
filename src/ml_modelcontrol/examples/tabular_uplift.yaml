@@ -1,0 +1,59 @@
+format_version: 1
+name: tabular_uplift
+description: >-
+  表の行の効果のモデル (効果を見積もる, T-learner): 行の特徴を重みを
+  共有しない 2 つの全結合の枝に通し, 処置したときの結果の予測 treated と
+  しないときの結果の予測 control を, どちらも (バッチ, 1) の形で返す
+  (結果が 0 と 1 ならロジット, 額なら値).
+  処置の列は入力に入れない.
+  学習の step で, 行の処置の値が 1 の行は treated だけ, 0 の行は control
+  だけに損失 (0 と 1 ならロジットの二値の交差エントロピー, 額なら二乗誤差)
+  を付ける.
+  行ごとの効果は treated から control を引いた値で, 0 と 1 ならそれぞれを
+  シグモイドで確率にしてから引く.
+  入力の幅 (x の shape の 2 番目, treated1 と control1 の in_features,
+  処置の列を除いた列の数) と隠れ層の幅 (treated1 と control1 の
+  out_features, treated2 と control2 の in_features) はデータに合わせて
+  書き換える
+inputs:
+  # 前処理を済ませた行の特徴 (8 行 × 処置の列を除いた 16 列)
+  x: {shape: [8, 16], ui: {x: 0, y: 160}}
+nodes:
+  # 処置の群の枝 (16 → 隠れ層の幅の 32 → 1)
+  treated1:
+    unit: nn.Linear
+    params: {in_features: 16, out_features: 32}
+    inputs: x
+    ui: {x: 220, y: 60}
+  treated_act:
+    unit: nn.ReLU
+    inputs: treated1
+    ui: {x: 470, y: 60}
+  treated2:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 1}
+    inputs: treated_act
+    ui: {x: 720, y: 60}
+  # 対照の群の枝 (16 → 隠れ層の幅の 32 → 1)
+  control1:
+    unit: nn.Linear
+    params: {in_features: 16, out_features: 32}
+    inputs: x
+    ui: {x: 220, y: 260}
+  control_act:
+    unit: nn.ReLU
+    inputs: control1
+    ui: {x: 470, y: 260}
+  control2:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 1}
+    inputs: control_act
+    ui: {x: 720, y: 260}
+# 処置したときとしないときの結果の予測 (損失と効果の計算に使う)
+outputs:
+  treated: treated2
+  control: control2
+ui:
+  outputs:
+    treated: {x: 970, y: 80}
+    control: {x: 970, y: 280}

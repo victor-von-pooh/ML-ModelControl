@@ -70,11 +70,12 @@ def test_example_names() -> None:
         load_example("../pyproject")
 
 
-# 受け持ちごとの雛形の例 (生成, 表現の学習, 推薦, 強化学習, 異常の検知)
+# 受け持ちごとの雛形の例 (生成, 表現の学習, 推薦, 強化学習, 異常の検知,
+# 効果の見積もり)
 ROLE_TEMPLATES = [
     "vae", "gan_generator", "gan_discriminator", "diffusion_denoiser",
     "contrastive_encoder", "two_tower_retrieval", "policy_value",
-    "tabular_autoencoder"
+    "tabular_autoencoder", "tabular_uplift"
 ]
 
 # 雛形の出力の名前ごとの形 (入力の例のバッチは 8)
@@ -89,7 +90,8 @@ ROLE_SHAPES = {
         "item_embedding": [8, 16]
     },
     "policy_value": {"logits": [8, 4], "value": [8, 1]},
-    "tabular_autoencoder": {"recon": [8, 16]}
+    "tabular_autoencoder": {"recon": [8, 16]},
+    "tabular_uplift": {"treated": [8, 1], "control": [8, 1]}
 }
 
 
@@ -482,3 +484,62 @@ def test_tabular_autoencoder_example() -> None:
     loss = nn.MSELoss()(model(rows), rows)
     loss.backward()
     assert model.nodes["enc1"].weight.grad is not None
+
+
+def test_tabular_uplift_example() -> None:
+    """
+    表の行の効果の例が, 処置したときとしないときの 2 つの予測を (バッチ, 1)
+    で出し, 処置の値で片方だけに付けた損失がその枝だけに届くことを確かめる
+    関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    from ml_modelcontrol import build_model
+
+    # 例の形と, 例と違う行の数で 2 つの出力
+    spec = load_example("tabular_uplift")
+    result = infer(spec)
+    assert result["outputs"]["treated"]["shape"] == [8, 1]
+    assert result["outputs"]["control"]["shape"] == [8, 1]
+    model = build_model(spec, seed=0).eval()
+    rows = torch.randn(6, 16)
+    with torch.no_grad():
+        outputs = model(rows)
+    assert outputs["treated"].shape == (6, 1)
+    assert outputs["control"].shape == (6, 1)
+
+    # 行ごとの効果 (0 と 1 の結果は確率の差)
+    effect = (
+        torch.sigmoid(outputs["treated"]) - torch.sigmoid(outputs["control"])
+    ).squeeze(1)
+    assert effect.shape == (6,)
+    assert bool((effect.abs() <= 1).all())
+
+    # 処置の群の行だけの損失は処置の群の枝だけに届く
+    model.train()
+    treatment = torch.tensor([1, 0, 1, 0, 1, 0])
+    labels = torch.tensor([1.0, 0.0, 0.0, 1.0, 1.0, 0.0])
+    criterion = nn.BCEWithLogitsLoss()
+    treated = treatment == 1
+    loss = criterion(
+        model(rows)["treated"].squeeze(1)[treated], labels[treated]
+    )
+    loss.backward()
+    assert model.nodes["treated1"].weight.grad is not None
+    assert model.nodes["control1"].weight.grad is None
+
+    # 両方の群の損失の和での学習 (両方の枝の最初の層まで届く勾配)
+    model.zero_grad(set_to_none=True)
+    outputs = model(rows)
+    loss = criterion(
+        outputs["treated"].squeeze(1)[treated], labels[treated]
+    ) + criterion(outputs["control"].squeeze(1)[~treated], labels[~treated])
+    loss.backward()
+    assert model.nodes["treated1"].weight.grad is not None
+    assert model.nodes["control1"].weight.grad is not None
