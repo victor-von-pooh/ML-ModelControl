@@ -3,6 +3,7 @@ import sys
 
 import pytest
 import torch
+from torch import nn
 
 from ml_modelcontrol import infer, list_examples, load_example, validate
 from ml_modelcontrol.infer import example_input
@@ -69,10 +70,11 @@ def test_example_names() -> None:
         load_example("../pyproject")
 
 
-# 受け持ちごとの雛形の例 (生成, 表現の学習, 推薦, 強化学習)
+# 受け持ちごとの雛形の例 (生成, 表現の学習, 推薦, 強化学習, 異常の検知)
 ROLE_TEMPLATES = [
     "vae", "gan_generator", "gan_discriminator", "diffusion_denoiser",
-    "contrastive_encoder", "two_tower_retrieval", "policy_value"
+    "contrastive_encoder", "two_tower_retrieval", "policy_value",
+    "tabular_autoencoder"
 ]
 
 # 雛形の出力の名前ごとの形 (入力の例のバッチは 8)
@@ -86,7 +88,8 @@ ROLE_SHAPES = {
         "score": [8, 8], "user_embedding": [8, 16],
         "item_embedding": [8, 16]
     },
-    "policy_value": {"logits": [8, 4], "value": [8, 1]}
+    "policy_value": {"logits": [8, 4], "value": [8, 1]},
+    "tabular_autoencoder": {"recon": [8, 16]}
 }
 
 
@@ -396,8 +399,8 @@ def test_segmentation_example() -> None:
         logits = model(torch.rand(2, 3, 48, 64))
     assert logits.shape == (2, 2, 48, 64)
 
-    # 骨組みと同じく, 画素ごとの交差エントロピーで学べる (勾配が入力の
-    # 最初の層まで届く)
+    # 骨組みと同じ画素ごとの交差エントロピーでの学習 (入力の最初の層まで
+    # 届く勾配)
     model.train()
     labels = torch.randint(0, 2, (2, 16, 16))
     loss = torch.nn.CrossEntropyLoss()(
@@ -435,10 +438,47 @@ def test_point_cloud_example() -> None:
     assert cloud.shape == (2, 256, 3)
     assert torch.allclose(cloud, shuffled, atol=1e-6)
 
-    # 骨組みと同じく Chamfer 距離で学べる (勾配が最初の層まで届く)
+    # 骨組みと同じ Chamfer 距離での学習 (最初の層まで届く勾配)
     model.train()
     target = torch.randn(2, 300, 3)
     pairs = torch.cdist(model(points), target) ** 2
     loss = (pairs.min(dim=2).values.mean() + pairs.min(dim=1).values.mean())
     loss.backward()
     assert model.nodes["encode1"].weight.grad is not None
+
+
+def test_tabular_autoencoder_example() -> None:
+    """
+    表の行の自己符号化器の例が, 入力と同じ幅の再構成を出し, 再構成の
+    誤差から行ごとの異常の度合いを出せることを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    from ml_modelcontrol import build_model
+
+    # 例の形と, 例と違う行の数で入力と同じ形の再構成
+    spec = load_example("tabular_autoencoder")
+    result = infer(spec)
+    assert result["outputs"]["recon"]["shape"] == [8, 16]
+    model = build_model(spec, seed=0).eval()
+    rows = torch.randn(5, 16)
+    with torch.no_grad():
+        recon = model(rows)
+    assert recon.shape == rows.shape
+
+    # 行ごとの異常の度合い (特徴の次元で平均した二乗誤差)
+    scores = ((recon - rows) ** 2).mean(dim=1)
+    assert scores.shape == (5,)
+    assert bool(torch.isfinite(scores).all())
+
+    # 再構成の二乗誤差での学習 (最初の層まで届く勾配)
+    model.train()
+    loss = nn.MSELoss()(model(rows), rows)
+    loss.backward()
+    assert model.nodes["enc1"].weight.grad is not None
