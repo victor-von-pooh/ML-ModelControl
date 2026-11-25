@@ -521,7 +521,7 @@ def test_tabular_uplift_example() -> None:
     assert effect.shape == (6,)
     assert bool((effect.abs() <= 1).all())
 
-    # 処置の群の行だけの損失は処置の群の枝だけに届く
+    # 処置の群の行だけの損失による勾配の範囲
     model.train()
     treatment = torch.tensor([1, 0, 1, 0, 1, 0])
     labels = torch.tensor([1.0, 0.0, 0.0, 1.0, 1.0, 0.0])
