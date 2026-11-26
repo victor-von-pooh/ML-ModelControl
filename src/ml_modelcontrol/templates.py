@@ -1,4 +1,5 @@
 import copy
+from numbers import Integral
 from typing import Any
 
 from ml_modelcontrol.spec import load_example
@@ -115,7 +116,8 @@ def adapt_example(name: str, values: dict[str, Any]) -> dict:
     name: str
         雛形の名前 (TEMPLATE_ARGS にある同梱の例)
     values: dict[str, Any]
-        引数の名前ごとの値 (1 以上の整数. 書かない引数は同梱の例のまま)
+        引数の名前ごとの値 (1 以上の整数. NumPy の整数も可. 書かない引数は
+        同梱の例のまま)
 
     Returns
     ----------
@@ -137,15 +139,17 @@ def adapt_example(name: str, values: dict[str, Any]) -> dict:
             f"{name} に書き換えられない引数です: {', '.join(unknown)} "
             f"(書き換えられるのは {', '.join(places)})"
         )
+    checked = {}
     for arg, value in values.items():
-        if isinstance(value, bool) or not isinstance(value, int) or (
+        if isinstance(value, bool) or not isinstance(value, Integral) or (
             value < 1
         ):
             raise ValueError(f"{arg} は 1 以上の整数にしてください")
+        checked[arg] = int(value)
 
     # 写しの定義の, 引数ごとの全ての場所の書き換え
     spec = copy.deepcopy(load_example(name))
-    for arg, value in values.items():
+    for arg, value in checked.items():
         for place in places[arg]:
             write_place(spec, place, value * place[3])
 

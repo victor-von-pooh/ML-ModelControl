@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 import torch
 
@@ -6,6 +7,21 @@ from ml_modelcontrol import (
     load_example, validate
 )
 from ml_modelcontrol.infer import example_input
+from ml_modelcontrol.templates import read_place
+
+
+# 雛形ごとの, 書き換えた引数がそのまま出る出力の幅 (出力, 軸, 引数). 入力の
+# 側の書き忘れは形の推定で, 出力の側の書き忘れはこの確かめで見つける
+OUTPUT_WIDTHS = {
+    "vae": [("recon", 1, "features"), ("mu", 1, "latent")],
+    "gan_generator": [("fake", 1, "features")],
+    "diffusion_denoiser": [("noise", 1, "features")],
+    "policy_value": [("logits", 1, "actions")],
+    "tabular_autoencoder": [("recon", 1, "features")],
+    "tabular_demand": [("quantiles", 1, "levels")],
+    "unet_segmentation": [("logits", 1, "classes")],
+    "point_cloud_predictor": [("cloud", 1, "points_out")],
+}
 
 
 @pytest.mark.parametrize("name", sorted(TEMPLATE_ARGS))
@@ -29,7 +45,10 @@ def test_adapt_every_template(name: str) -> None:
     values = {arg: value + 3 for arg, value in current.items()}
     spec = adapt_example(name, values)
     assert validate(spec) == []
-    infer(spec)
+    result = infer(spec)
+    for output, axis, arg in OUTPUT_WIDTHS.get(name, []):
+        shape = result["outputs"][output]["shape"]
+        assert shape[axis] == values[arg], (name, output)
     model = build_model(spec, seed=0)
     with torch.no_grad():
         model(**example_input(spec))
@@ -56,8 +75,6 @@ def example_args_of(spec: dict, name: str) -> dict:
         引数の名前ごとの値 (全ての場所で同じ値であることも確かめる)
     """
     # 場所ごとの値を倍率で割り, 引数ごとに 1 つ
-    from ml_modelcontrol.templates import read_place
-
     values = {}
     for arg, places in TEMPLATE_ARGS[name].items():
         found = {read_place(spec, place) // place[3] for place in places}
@@ -118,4 +135,9 @@ def test_adapt_errors() -> None:
     for value in (0, -1, 2.0, True, "3"):
         with pytest.raises(ValueError, match="1 以上の整数"):
             adapt_example("vae", {"features": value})
+
+    # NumPy の整数は受け, 定義には Python の整数で書く
+    spec = adapt_example("vae", {"features": np.int64(12)})
+    assert spec["inputs"]["x"]["shape"] == [8, 12]
+    assert type(spec["inputs"]["x"]["shape"][1]) is int
     assert load_example("vae")["inputs"]["x"]["shape"] == [8, 16]
