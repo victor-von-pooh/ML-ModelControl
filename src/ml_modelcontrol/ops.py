@@ -250,6 +250,36 @@ class Max(nn.Module):
         return largest
 
 
+class CumSum(nn.Module):
+    def __init__(self, dim: int = 1):
+        # 親クラスのコンストラクタを呼び出す
+        super(CumSum, self).__init__()
+
+        # 足していく次元を保存
+        self.dim = dim
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        """
+        決めた次元で前から順に足していく関数 (累積和)
+
+        負にならない差を足していき, 下がらない並びを作るときなどに使う
+        (分位点が交わらない出し方)
+
+        Parameters
+        ----------
+        input: torch.Tensor
+            足していくテンソル
+
+        Returns
+        ----------
+        total: torch.Tensor
+            同じ形の累積和
+        """
+        total = torch.cumsum(input, dim=self.dim)
+
+        return total
+
+
 class Select(nn.Module):
     def __init__(self, index: int = 0):
         # 親クラスのコンストラクタを呼び出す

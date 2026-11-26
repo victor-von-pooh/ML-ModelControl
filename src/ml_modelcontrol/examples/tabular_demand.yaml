@@ -1,0 +1,54 @@
+format_version: 1
+name: tabular_demand
+description: >-
+  表の行の需要の分位点のモデル (時間をまたぐ量の判断): 商品の特徴と
+  過去の売れた数の行を全結合の層に通し, 先の期間の売れた数の合計の
+  分位点を, 水準の小さい順に quantiles に (バッチ, 水準の数) の形で返す.
+  分位点の水準の値はモデルが持たず, 学習のスクリプトが決める (例の 9 は
+  0.1 から 0.9 の 0.1 刻み).
+  最後の全結合の出力に softplus をかけ, 水準の次元で前から足していく
+  (最も小さい水準の値と, 隣どうしの差がどれも正になる) ので, 分位点は
+  負にならず, 水準の順に値が下がらない (交わらない).
+  学習の step で, 水準ごとの分位点の損失 (pinball loss) を水準と行で
+  平均して損失にする.
+  発注は, 損の比から決まる水準の分位点 (学んだ水準に無ければ隣の 2 つの
+  水準を直線で補う) から在庫の数を引いて決める.
+  入力の幅 (x の shape の 2 番目, demand1 の in_features) と水準の数
+  (demand2 の out_features), 隠れ層の幅 (demand1 の out_features,
+  demand2 の in_features) はデータに合わせて書き換える
+inputs:
+  # 前処理を済ませた行 (8 行 × 学習に使う 16 列)
+  x: {shape: [8, 16], ui: {x: 0, y: 100}}
+nodes:
+  # 分位点の水準ごとの値のもと (16 → 隠れ層の幅の 32 → 水準の数の 9)
+  demand1:
+    unit: nn.Linear
+    params: {in_features: 16, out_features: 32}
+    inputs: x
+    ui: {x: 220, y: 80}
+  demand_act:
+    unit: nn.ReLU
+    inputs: demand1
+    ui: {x: 470, y: 80}
+  demand2:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 9}
+    inputs: demand_act
+    ui: {x: 720, y: 80}
+  # 最も小さい水準の値と隣どうしの差 (どれも正)
+  demand_softplus:
+    unit: nn.Softplus
+    inputs: demand2
+    ui: {x: 970, y: 80}
+  # 前から足していき, 水準の順に下がらない分位点
+  demand_cumsum:
+    unit: op.CumSum
+    params: {dim: 1}
+    inputs: demand_softplus
+    ui: {x: 1220, y: 80}
+# 先の期間の需要の分位点 (損失と発注の数の計算に使う)
+outputs:
+  quantiles: demand_cumsum
+ui:
+  outputs:
+    quantiles: {x: 1470, y: 100}

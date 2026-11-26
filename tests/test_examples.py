@@ -71,11 +71,12 @@ def test_example_names() -> None:
 
 
 # 受け持ちごとの雛形の例 (生成, 表現の学習, 推薦, 強化学習, 異常の検知,
-# 効果の見積もり, 値段を変える判断)
+# 効果の見積もり, 値段を変える判断, 時間をまたぐ量の判断)
 ROLE_TEMPLATES = [
     "vae", "gan_generator", "gan_discriminator", "diffusion_denoiser",
     "contrastive_encoder", "two_tower_retrieval", "policy_value",
-    "tabular_autoencoder", "tabular_uplift", "tabular_price"
+    "tabular_autoencoder", "tabular_uplift", "tabular_price",
+    "tabular_demand"
 ]
 
 # 雛形の出力の名前ごとの形 (入力の例のバッチは 8)
@@ -92,7 +93,8 @@ ROLE_SHAPES = {
     "policy_value": {"logits": [8, 4], "value": [8, 1]},
     "tabular_autoencoder": {"recon": [8, 16]},
     "tabular_uplift": {"treated": [8, 1], "control": [8, 1]},
-    "tabular_price": {"units": [8, 1]}
+    "tabular_price": {"units": [8, 1]},
+    "tabular_demand": {"quantiles": [8, 9]}
 }
 
 
@@ -609,3 +611,54 @@ def test_tabular_price_example() -> None:
     assert model.nodes["units1"].weight.grad is not None
     assert inputs.grad is not None
     assert bool(inputs.grad[:, -1].abs().sum() > 0)
+
+
+def test_tabular_demand_example() -> None:
+    """
+    需要の分位点の例が, 入力の幅と水準の数を変えても分位点を (バッチ,
+    水準の数) で出し, 値が負にならず水準の順に下がらないことと, 分位点の
+    損失で学べることを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    from ml_modelcontrol import build_model
+
+    # 例の形と, 例と違う行の数での分位点 (大きな値の入力も含める)
+    spec = load_example("tabular_demand")
+    result = infer(spec)
+    assert result["outputs"]["quantiles"]["shape"] == [8, 9]
+    model = build_model(spec, seed=0).eval()
+    rows = torch.cat([torch.randn(5, 16), 50.0 * torch.randn(1, 16)])
+    with torch.no_grad():
+        quantiles = model(rows)
+    assert quantiles.shape == (6, 9)
+    assert bool((quantiles >= 0).all())
+    assert bool((quantiles[:, 1:] >= quantiles[:, :-1]).all())
+
+    # 入力の幅と水準の数を書き換えた定義 (学習に使う 24 列, 水準の 3 つ)
+    wide = load_example("tabular_demand")
+    wide["inputs"]["x"]["shape"] = [8, 24]
+    wide["nodes"]["demand1"]["params"]["in_features"] = 24
+    wide["nodes"]["demand2"]["params"]["out_features"] = 3
+    assert validate(wide) == []
+    assert infer(wide)["outputs"]["quantiles"]["shape"] == [8, 3]
+    with torch.no_grad():
+        narrow = build_model(wide, seed=0)(torch.randn(4, 24))
+    assert narrow.shape == (4, 3)
+    assert bool((narrow[:, 1:] >= narrow[:, :-1]).all())
+
+    # 分位点の損失での学習 (水準ごとの pinball loss を水準と行で平均)
+    model.train()
+    levels = torch.linspace(0.1, 0.9, 9)
+    target = torch.tensor([[0.0], [3.0], [7.0], [12.0], [1.0], [40.0]])
+    error = target - model(rows)
+    loss = torch.maximum(levels * error, (levels - 1.0) * error).mean()
+    loss.backward()
+    assert model.nodes["demand1"].weight.grad is not None
+    assert bool(model.nodes["demand2"].weight.grad.abs().sum() > 0)
