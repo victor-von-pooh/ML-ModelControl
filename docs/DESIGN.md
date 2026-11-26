@@ -345,3 +345,19 @@ nodes:
 | `tabular_demand` | 予測する (時間をまたぐ量の判断) | `x` (B, F) | `quantiles` (B, Q) | `quantiles` (水準の小さい順) | F: `x` の `shape`, `demand1` の `in_features`. 水準の数 Q: `demand2` の `out_features` |
 | `unet_segmentation` | 予測する (画像の領域) | `image` (B, C, H, W) | `logits` (B, K, H, W) | `logits` | チャンネル数 C: `image` の `shape`, `enc1a` の `in_channels`. クラス数 K (背景を含む): `head` の `out_channels`. H と W は 4 の倍数 |
 | `point_cloud_predictor` | 予測する (点群) | `observed` (B, N, 3) | `cloud` (B, M, 3) | `cloud` | 入力の点の数 N: `observed` の `shape`. 出す点の数 M: `decode2` の `out_features` (M × 3), `cloud` の `shape` |
+
+### データに合わせた雛形の書き換え (`adapt_example`)
+
+上の表の「データに合わせて書き換える引数」は, 名前で書き換えられる. `example_args(name)` は雛形の引数の名前と同梱の例の値を, `adapt_example(name, values)` は渡した引数 (`values`. 名前ごとの 1 以上の整数. 書かない引数は同梱の例のまま) を関わる全てのノードの引数と入力の `shape` にそろえて書いた定義 (同梱の例の写し) を返す. 使う側 (ML-Quest の骨組み, ML-CreateArchitecture) はノードの名前を知らずに雛形をデータの幅に合わせられ, 1 か所の書き忘れで組み立てが誤ることが無い. 書き換えられない雛形は `KeyError`, 知らない引数の名前と, 1 以上の整数でない値 (真偽値と小数を含む) は `ValueError`. 書き換える場所は `TEMPLATE_ARGS` (公開の名前) にあり, 上の表と同じ雛形を持つ (テストで確かめる).
+
+| 雛形 | 引数の名前 (表の記号) |
+| --- | --- |
+| `vae` | `features` (F), `latent` (L. `enc2` の `out_features` には 2L を書く) |
+| `gan_generator` | `noise` (Z), `features` (F) |
+| `gan_discriminator`, `diffusion_denoiser`, `contrastive_encoder`, `tabular_uplift`, `tabular_price` | `features` (F. `tabular_price` は値段の列を含む `x` の幅 F + 1) |
+| `two_tower_retrieval` | `users` (U), `items` (I) |
+| `policy_value` | `observations` (O), `actions` (A) |
+| `tabular_autoencoder` | `features` (F), `bottleneck` (縮めた幅) |
+| `tabular_demand` | `features` (F), `levels` (Q) |
+| `unet_segmentation` | `channels` (C), `classes` (K) |
+| `point_cloud_predictor` | `points_in` (N), `points_out` (M. `decode2` の `out_features` には 3M を書く) |

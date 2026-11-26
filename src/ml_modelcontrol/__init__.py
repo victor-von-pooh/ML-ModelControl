@@ -11,6 +11,9 @@ from ml_modelcontrol.registry import describe_units, get_unit
 from ml_modelcontrol.spec import (
     dump_spec, embed_subgraph, list_examples, load_example, load_spec
 )
+from ml_modelcontrol.templates import (
+    TEMPLATE_ARGS, adapt_example, example_args
+)
 from ml_modelcontrol.units import register_unit
 from ml_modelcontrol.validate import describe_spec_units, validate
 
@@ -21,9 +24,11 @@ except metadata.PackageNotFoundError:
     __version__ = "不明"
 
 __all__ = [
-    "GraphModel", "SpecError", "__version__", "build_model",
+    "GraphModel", "SpecError", "TEMPLATE_ARGS", "__version__",
+    "adapt_example", "build_model",
     "classify_license", "clear_pretrained_cache", "describe_spec_units",
-    "describe_units", "dump_spec", "embed_subgraph", "export_python",
+    "describe_units", "dump_spec", "embed_subgraph", "example_args",
+    "export_python",
     "get_unit", "infer", "list_examples", "load_example", "load_spec",
     "pretrained_info", "register_unit", "register_units_from", "validate"
 ]
