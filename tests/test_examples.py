@@ -71,7 +71,7 @@ def test_example_names() -> None:
 
 
 # 受け持ちごとの雛形の例 (生成, 表現の学習, 推薦, 強化学習, 異常の検知,
-# 効果の見積もり)
+# 効果の見積もり, 値段を変える判断)
 ROLE_TEMPLATES = [
     "vae", "gan_generator", "gan_discriminator", "diffusion_denoiser",
     "contrastive_encoder", "two_tower_retrieval", "policy_value",
@@ -583,19 +583,22 @@ def test_tabular_price_example() -> None:
         units = build_model(wide, seed=0)(torch.randn(3, 25))
     assert units.shape == (3, 1)
 
-    # 候補の値段ごとの予測 (値段の列だけを置き換え, 範囲の外でも負でない値)
-    candidates = torch.tensor([-3.0, 0.0, 3.0, 30.0])
+    # 候補の値段ごとの予測 (元の値段の候補は 0 より大きく, 値段の列には
+    # 標準化をかけた値を入れる. 最後の候補は記録の範囲の外でも負でない値)
+    prices = torch.tensor([80.0, 100.0, 120.0, 3000.0])
     predictions = []
-    for price in candidates:
+    for price in prices:
         varied = rows.clone()
-        varied[:, -1] = price
+        varied[:, -1] = (price - 100.0) / 20.0
         with torch.no_grad():
             predictions.append(model(varied).squeeze(1))
     table = torch.stack(predictions, dim=1)
     assert table.shape == (6, 4)
     assert bool((table >= 0).all())
-    best = (candidates * table).argmax(dim=1)
-    assert best.shape == (6,)
+
+    # 値段の列だけを変えたときの予測の違い (選び方の式は学習のスクリプトの
+    # 側で行う)
+    assert not torch.allclose(table[:, 0], table[:, 3])
 
     # 売れた数の二乗誤差での学習 (最初の層と値段の列まで届く勾配)
     model.train()
