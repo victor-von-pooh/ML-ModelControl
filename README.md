@@ -259,7 +259,7 @@ ML-Found のプロジェクト (`configs/default/train.yaml`, `configs/experimen
 import torch
 from ml_modelcontrol import build_model
 
-run_dir = "outputs/mlp/2026-11-15/01-14-54"
+run_dir = "outputs/mlp/<日付>/<時刻>"   # 実際の実験のディレクトリに置き換える
 model = build_model(f"{run_dir}/model_spec.yaml")
 model.load_state_dict(torch.load(f"{run_dir}/final_model.pt"))
 ```
