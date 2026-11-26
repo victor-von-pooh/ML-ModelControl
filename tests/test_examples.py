@@ -75,7 +75,7 @@ def test_example_names() -> None:
 ROLE_TEMPLATES = [
     "vae", "gan_generator", "gan_discriminator", "diffusion_denoiser",
     "contrastive_encoder", "two_tower_retrieval", "policy_value",
-    "tabular_autoencoder", "tabular_uplift"
+    "tabular_autoencoder", "tabular_uplift", "tabular_price"
 ]
 
 # 雛形の出力の名前ごとの形 (入力の例のバッチは 8)
@@ -91,7 +91,8 @@ ROLE_SHAPES = {
     },
     "policy_value": {"logits": [8, 4], "value": [8, 1]},
     "tabular_autoencoder": {"recon": [8, 16]},
-    "tabular_uplift": {"treated": [8, 1], "control": [8, 1]}
+    "tabular_uplift": {"treated": [8, 1], "control": [8, 1]},
+    "tabular_price": {"units": [8, 1]}
 }
 
 
@@ -543,3 +544,65 @@ def test_tabular_uplift_example() -> None:
     loss.backward()
     assert model.nodes["treated1"].weight.grad is not None
     assert model.nodes["control1"].weight.grad is not None
+
+
+def test_tabular_price_example() -> None:
+    """
+    値段を入力に入れる売れ行きの例が, 入力の幅を変えても売れた数の予測を
+    (バッチ, 1) の負でない値で出し, 候補の値段ごとに予測し直せることと,
+    値段の列まで勾配が届くことを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    from ml_modelcontrol import build_model
+
+    # 例の形と, 例と違う行の数での売れた数の予測
+    spec = load_example("tabular_price")
+    result = infer(spec)
+    assert result["outputs"]["units"]["shape"] == [8, 1]
+    model = build_model(spec, seed=0).eval()
+    rows = torch.randn(6, 17)
+    with torch.no_grad():
+        units = model(rows)
+    assert units.shape == (6, 1)
+    assert bool((units >= 0).all())
+
+    # 入力の幅を書き換えた定義 (特徴の 24 列 + 値段の 1 列)
+    wide = load_example("tabular_price")
+    wide["inputs"]["x"]["shape"] = [8, 25]
+    wide["nodes"]["units1"]["params"]["in_features"] = 25
+    assert validate(wide) == []
+    assert infer(wide)["outputs"]["units"]["shape"] == [8, 1]
+    with torch.no_grad():
+        units = build_model(wide, seed=0)(torch.randn(3, 25))
+    assert units.shape == (3, 1)
+
+    # 候補の値段ごとの予測 (値段の列だけを置き換え, 範囲の外でも負でない値)
+    candidates = torch.tensor([-3.0, 0.0, 3.0, 30.0])
+    predictions = []
+    for price in candidates:
+        varied = rows.clone()
+        varied[:, -1] = price
+        with torch.no_grad():
+            predictions.append(model(varied).squeeze(1))
+    table = torch.stack(predictions, dim=1)
+    assert table.shape == (6, 4)
+    assert bool((table >= 0).all())
+    best = (candidates * table).argmax(dim=1)
+    assert best.shape == (6,)
+
+    # 売れた数の二乗誤差での学習 (最初の層と値段の列まで届く勾配)
+    model.train()
+    inputs = rows.clone().requires_grad_(True)
+    target = torch.tensor([[0.0], [1.0], [3.0], [2.0], [0.0], [5.0]])
+    loss = nn.MSELoss()(model(inputs), target)
+    loss.backward()
+    assert model.nodes["units1"].weight.grad is not None
+    assert inputs.grad is not None
+    assert bool(inputs.grad[:, -1].abs().sum() > 0)
