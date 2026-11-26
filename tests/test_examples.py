@@ -688,6 +688,12 @@ def contract_rows() -> dict[str, tuple[list[str], list[str]]]:
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
         if len(cells) < 4 or not cells[0].startswith("`"):
             continue
+        # 6 つの列で, 入力と出力の名前は全て形付き
+        assert len(cells) == 6, line
+        for cell in cells[2:4]:
+            assert len(re.findall(r"`\w+`", cell)) == len(
+                re.findall(r"`(\w+)` \(", cell)
+            ), line
         rows[cells[0].strip("`")] = (
             re.findall(r"`(\w+)` \(", cells[2]),
             re.findall(r"`(\w+)` \(", cells[3]),
