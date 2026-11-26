@@ -325,3 +325,23 @@ nodes:
     - `unet_segmentation` は 2 段の U-Net (縮める側の畳み込みと最大値プーリング, 広げる側の転置畳み込みと, 同じ大きさの縮める側の特徴との連結). 高さと幅は 4 の倍数にする (2 回半分にして戻すため). 入力のチャンネル数 (`enc1a` の `in_channels`) とクラス数 (`head` の `out_channels`. 背景を含む) はデータに合わせて書き換える
     - `point_cloud_predictor` は PointNet の形の符号化 (点ごとの全結合と, 点の並びに依らない最大値のまとめ) と全結合の復号で, 決まった数の点を出す. 多視点の撮影 (画像, 姿勢, 深度) は学習のスクリプトが深度から点に戻して渡す (骨組みの `backproject`) ので, 画像そのものは読まない. 観測の点から形を補う比べる相手の基準で, 撮影の画像から形を推し量るモデルではない. 出す点の数を変える場合は `decode2` の `out_features` (点の数 × 3) と `cloud` の `shape` をそろえて書き換える
 - 出力の口は部品ごとに決まっていて引数では増やせないので, 分割 (`op.Chunk`) は名前を付けた複数の口ではなく, 等分した何番目かを 1 つ取り出す部品
+
+### 受け持ちごとの雛形の入力と出力の約束
+
+受け持ちごとの雛形と, 領域と点群の例は, 学習のスクリプト (ML-Quest の骨組み) と ML-CreateArchitecture が名前で指し, 骨組みは出力の名前で値を読む (異常の検知の `recon`, 効果の `treated` と `control`, 値段の `units`, 需要の `quantiles`, まとめるの `embedding` と `similarity`, 並べるの `score`, `user_embedding`, `item_embedding`. 他の雛形の出力は, 学習のスクリプトがその名前で読むための約束). そこで, 雛形の名前, 入力の名前, 出力の名前と形は次の表を約束にする. 名前を変えるか, 出力を足すか消すか, 形の決まりを変える場合は, 定義の版とは別に, この表と `tests/test_examples.py` の `ROLE_SHAPES` を直し, 使う側 (ML-Quest, ML-CreateArchitecture) に知らせる (黙って変えると, 後ろの段階が学習を始めてから食い違うため). 形の B はバッチ, F は前処理の後の 1 行の特徴の数で, データから決まる. 表のテストは, 表の雛形が受け持ちごとの雛形と領域と点群の例のちょうど全てで, 入力と出力の名前が例の定義と形の推定の結果と (受け持ちごとの雛形は `ROLE_SHAPES` とも) 同じかを確かめる.
+
+| 雛形 | 受け持ち | 入力 | 出力 | 学習のスクリプトが読む出力 | データに合わせて書き換える引数 |
+| --- | --- | --- | --- | --- | --- |
+| `vae` | 作る (VAE) | `x` (B, F) | `recon` (B, F), `mu` (B, L), `logvar` (B, L) | `recon`, `mu`, `logvar` (再構成の誤差と KL) | F: `x` の `shape`, `enc1` の `in_features`, `dec2` の `out_features`. 潜在の幅 L: `enc2` の `out_features` (2L), `dec1` の `in_features` |
+| `gan_generator` | 作る (GAN の生成器) | `z` (B, Z) | `fake` (B, F) | `fake` | Z: `z` の `shape`, `fc1` の `in_features`. F: `fc2` の `out_features` |
+| `gan_discriminator` | 作る (GAN の識別器) | `x` (B, F) | `logit` (B, 1) | `logit` | F: `x` の `shape`, `fc1` の `in_features` |
+| `diffusion_denoiser` | 作る (拡散) | `x` (B, F), `t` (B) | `noise` (B, F) | `noise` (加えた雑音との二乗誤差) | F: `x` の `shape`, `x_fc` の `in_features`, `head` の `out_features` |
+| `contrastive_encoder` | まとめる | `x` (B, F) | `embedding` (B, E), `similarity` (B, B) | `similarity` (学習), `embedding` (群の中心と推論) | F: `x` の `shape`, `fc1` の `in_features` |
+| `two_tower_retrieval` | 並べる | `user` (B, U), `item` (B, I) | `score` (B, B), `user_embedding` (B, E), `item_embedding` (B, E) | `score` (学習), `user_embedding` と `item_embedding` (索引と推論) | 利用者の数 U: `user` の `shape`, `user_fc1` の `in_features`. 品物の数 I: `item` の `shape`, `item_fc1` の `in_features` |
+| `policy_value` | 効果を見積もる (方策) | `obs` (B, O) | `logits` (B, A), `value` (B, 1) | `logits`, `value` | 観測の数 O: `obs` の `shape`, `fc1` の `in_features`. 行動の数 A: `policy` の `out_features` |
+| `tabular_autoencoder` | 予測する (異常の検知) | `x` (B, F) | `recon` (B, F) | `recon` (再構成の誤差が度合い) | F: `x` の `shape`, `enc1` の `in_features`, `dec2` の `out_features`. 縮めた幅: `enc2` の `out_features`, `dec1` の `in_features` |
+| `tabular_uplift` | 効果を見積もる (今ある記録から) | `x` (B, F) | `treated` (B, 1), `control` (B, 1) | `treated`, `control` | F (処置の列を除く): `x` の `shape`, `treated1` と `control1` の `in_features` |
+| `tabular_price` | 効果を見積もる (値段を変える判断) | `x` (B, F + 1) | `units` (B, 1) | `units` | F + 1 (最後の列が値段): `x` の `shape`, `units1` の `in_features` |
+| `tabular_demand` | 予測する (時間をまたぐ量の判断) | `x` (B, F) | `quantiles` (B, Q) | `quantiles` (水準の小さい順) | F: `x` の `shape`, `demand1` の `in_features`. 水準の数 Q: `demand2` の `out_features` |
+| `unet_segmentation` | 予測する (画像の領域) | `image` (B, C, H, W) | `logits` (B, K, H, W) | `logits` | チャンネル数 C: `image` の `shape`, `enc1a` の `in_channels`. クラス数 K (背景を含む): `head` の `out_channels`. H と W は 4 の倍数 |
+| `point_cloud_predictor` | 予測する (点群) | `observed` (B, N, 3) | `cloud` (B, M, 3) | `cloud` | 入力の点の数 N: `observed` の `shape`. 出す点の数 M: `decode2` の `out_features` (M × 3), `cloud` の `shape` |
