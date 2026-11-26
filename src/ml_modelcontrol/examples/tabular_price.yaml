@@ -1,0 +1,48 @@
+format_version: 1
+name: tabular_price
+description: >-
+  表の行の売れ行きのモデル (値段を変える判断): 商品の特徴と
+  値段の行を全結合の層に通し, 売れた数の予測 units を (バッチ, 1) の形で
+  返す.
+  値段の列は入力の最後の列で, 前処理の手順をかけた値を入れる.
+  売れた数は 0 以上なので, 最後に softplus をかけて負にならない値を出す
+  (候補の値段が記録の範囲の外でも負の数を出さず, ReLU と違って負の側でも
+  勾配が消えないため).
+  値段が大きいほど売れた数が減る向きは形で縛らない (向きは記録から学ぶ).
+  学習の step で, units と売れた数の二乗誤差 (数の小さい整数なら
+  log_input を False にした PoissonNLLLoss でもよい) を損失にする.
+  候補の値段ごとに入力の値段の列だけを置き換えて予測し, (値段 − 原価) ×
+  units が最も大きい候補を商品ごとに選ぶ.
+  入力の幅 (x の shape の 2 番目, units1 の in_features, 特徴の列の数 +
+  値段の列の 1) と隠れ層の幅 (units1 の out_features, units2 の
+  in_features) はデータに合わせて書き換える
+inputs:
+  # 前処理を済ませた行 (8 行 × 特徴の 16 列 + 最後の値段の 1 列)
+  x: {shape: [8, 17], ui: {x: 0, y: 100}}
+nodes:
+  # 売れた数の予測 (17 → 隠れ層の幅の 32 → 1)
+  units1:
+    unit: nn.Linear
+    params: {in_features: 17, out_features: 32}
+    inputs: x
+    ui: {x: 220, y: 80}
+  units_act:
+    unit: nn.ReLU
+    inputs: units1
+    ui: {x: 470, y: 80}
+  units2:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 1}
+    inputs: units_act
+    ui: {x: 720, y: 80}
+  # 負にならない売れた数
+  units_softplus:
+    unit: nn.Softplus
+    inputs: units2
+    ui: {x: 970, y: 80}
+# 売れた数の予測 (損失と利益の計算に使う)
+outputs:
+  units: units_softplus
+ui:
+  outputs:
+    units: {x: 1220, y: 100}
