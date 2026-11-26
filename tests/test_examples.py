@@ -7,7 +7,9 @@ import pytest
 import torch
 from torch import nn
 
-from ml_modelcontrol import infer, list_examples, load_example, validate
+from ml_modelcontrol import (
+    TEMPLATE_ARGS, infer, list_examples, load_example, validate
+)
 from ml_modelcontrol.infer import example_input
 
 
@@ -719,6 +721,7 @@ def test_role_contract_table() -> None:
     rows = contract_rows()
     assert set(rows) == {*ROLE_TEMPLATES, "unet_segmentation",
                          "point_cloud_predictor"}
+    assert set(rows) == set(TEMPLATE_ARGS)
     for name, (inputs, outputs) in rows.items():
         spec = load_example(name)
         assert inputs == list(spec["inputs"]), name
