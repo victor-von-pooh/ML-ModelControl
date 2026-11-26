@@ -1,5 +1,7 @@
 import importlib.util
+import re
 import sys
+from pathlib import Path
 
 import pytest
 import torch
@@ -662,3 +664,58 @@ def test_tabular_demand_example() -> None:
     loss.backward()
     assert model.nodes["demand1"].weight.grad is not None
     assert bool(model.nodes["demand2"].weight.grad.abs().sum() > 0)
+
+
+def contract_rows() -> dict[str, tuple[list[str], list[str]]]:
+    """
+    docs/DESIGN.md の「受け持ちごとの雛形の入力と出力の約束」の表を読む関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    rows: dict[str, tuple[list[str], list[str]]]
+        雛形の名前ごとの, 入力の名前と出力の名前 (書いた順)
+    """
+    # 見出しの後の表の行 (雛形, 受け持ち, 入力, 出力, ...)
+    path = Path(__file__).resolve().parents[1] / "docs" / "DESIGN.md"
+    text = path.read_text(encoding="utf-8")
+    section = text.split("### 受け持ちごとの雛形の入力と出力の約束", 1)[1]
+    rows = {}
+    for line in section.splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 4 or not cells[0].startswith("`"):
+            continue
+        rows[cells[0].strip("`")] = (
+            re.findall(r"`(\w+)` \(", cells[2]),
+            re.findall(r"`(\w+)` \(", cells[3]),
+        )
+
+    return rows
+
+
+def test_role_contract_table() -> None:
+    """
+    DESIGN.md の約束の表が, 受け持ちごとの雛形と領域と点群の例の入力と
+    出力の名前と合うことを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 表の雛形は受け持ちごとの雛形と, 領域と点群の例
+    rows = contract_rows()
+    assert set(rows) == {*ROLE_TEMPLATES, "unet_segmentation",
+                         "point_cloud_predictor"}
+    for name, (inputs, outputs) in rows.items():
+        spec = load_example(name)
+        assert inputs == list(spec["inputs"]), name
+        assert outputs == list(infer(spec)["outputs"]), name
+        if name in ROLE_SHAPES:
+            assert outputs == list(ROLE_SHAPES[name]), name
