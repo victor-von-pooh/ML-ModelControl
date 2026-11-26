@@ -302,3 +302,41 @@ def test_max() -> None:
     assert unit.category == "op" and unit.description
     assert [port.name for port in unit.outputs] == ["out"]
     assert all(param.description for param in unit.params)
+
+
+def test_cumsum() -> None:
+    """
+    op.CumSum が決めた次元で前から順に足していき, 負でない値を足すと下が
+    らない並びになることと, 一覧に説明付きで出ることを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    # 既定の次元 (1) と後ろからの次元での累積和
+    value = torch.tensor([[1.0, 2.0, 3.0], [0.5, -1.0, 4.0]])
+    assert torch.equal(
+        ops.CumSum()(value), torch.tensor([[1.0, 3.0, 6.0], [0.5, -0.5, 3.5]])
+    )
+    assert torch.equal(ops.CumSum(dim=-1)(value), ops.CumSum()(value))
+    assert torch.equal(
+        ops.CumSum(dim=0)(value), torch.tensor([[1.0, 2.0, 3.0],
+                                                [1.5, 1.0, 7.0]])
+    )
+
+    # 負でない値を足すと下がらず, 勾配は前の全ての要素に流れる
+    steps = torch.rand(4, 6, requires_grad=True)
+    total = ops.CumSum()(steps)
+    assert bool((total[:, 1:] >= total[:, :-1]).all())
+    total[:, -1].sum().backward()
+    assert torch.equal(steps.grad, torch.ones(4, 6))
+
+    # 登録簿の説明と引数の説明
+    unit = get_unit("op.CumSum")
+    assert unit.category == "op" and unit.description
+    assert [port.name for port in unit.outputs] == ["out"]
+    assert all(param.description for param in unit.params)

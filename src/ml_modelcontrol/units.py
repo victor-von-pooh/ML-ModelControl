@@ -283,6 +283,8 @@ OPS = [
     ("Mean", ops.Mean, "dim の次元で平均を取る", False),
     ("Max", ops.Max,
      "dim の次元で最大値を取る (例: 点の並びに依らない点群のまとめ)", False),
+    ("CumSum", ops.CumSum,
+     "dim の次元で前から順に足していく (例: 交わらない分位点)", False),
     ("Select", ops.Select,
      "index 番目を取り出す (タプルやリストは要素, テンソルは最初の次元)",
      False),
@@ -338,6 +340,10 @@ OP_PARAM_NOTES = {
     "Max": {
         "dim": {"description": "最大値を取る次元 (例: 点群の点の次元は 1)"},
         "keepdim": {"description": "最大値を取った次元を大きさ 1 で残すか"}
+    },
+    "CumSum": {
+        "dim": {"description": "足していく次元 (負の数は後ろから. 例: 分位点の"
+                               "水準の次元は 1)"}
     },
     "Select": {
         "index": {"description": "取り出す番号 (負の数は後ろから. 例: LSTM の "
