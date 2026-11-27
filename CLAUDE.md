@@ -25,7 +25,7 @@ PyTorch (と互換のライブラリ) で作れるモデルの部品を登録簿
 ## 進める流れ
 
 1. 方針を変える場合や新しい機能を加える場合は, 先に docs/DESIGN.md を直す. 終えた TODO.md の項目は消す
-2. テストを書き, `pytest` を通す (準備は `pip install -e ".[dev]"`). 任意の依存 (PyTorch Geometric, transformers) が無い環境でも, 残りのテストは通るようにする
+2. テストを書き, `pytest` を通す (準備は `pip install -e ".[dev]"`). 任意の依存 (PyTorch Geometric, transformers) が無い環境でも, 残りのテストは通るようにする. CI は, CLAUDE.md の一覧に無いリポジトリの名前が管理下のファイルに無いことも `python scripts/check_repo_names.py` で確かめる
 3. **セルフレビュー**: 複数のエージェントを並行して動かし, バグ, 設計との食い違い, CODING_STYLE.md への準拠を確認する
 4. 指摘を直し, 直した内容と残した指摘をユーザーに報告する
 
