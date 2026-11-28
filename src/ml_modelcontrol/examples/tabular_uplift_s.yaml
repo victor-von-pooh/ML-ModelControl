@@ -1,0 +1,40 @@
+format_version: 1
+name: tabular_uplift_s
+description: >-
+  処置を入力に入れる表の行の効果のモデル (効果を見積もる, S-learner):
+  行の特徴と処置の行を全結合の層に通し, 結果の予測 outcome を (バッチ, 1)
+  の形で返す (結果が 0 と 1 ならロジット, 額なら値).
+  処置の列は入力の最後の列で, 処置の値の 1 か 0 を前処理をかけずに入れる.
+  効果は負にもなるので, 出力に負にならない縛りはかけない.
+  学習の step で, 全ての行の outcome に損失 (0 と 1 ならロジットの二値の
+  交差エントロピー, 額なら二乗誤差) を付ける.
+  行ごとの効果は, 処置の列を 1 にした予測から 0 にした予測を引いた値で,
+  0 と 1 ならそれぞれをシグモイドで確率にしてから引く.
+  入力の幅 (x の shape の 2 番目, outcome1 の in_features, 特徴の列の数 +
+  処置の列の 1) と隠れ層の幅 (outcome1 の out_features, outcome2 の
+  in_features) はデータに合わせて書き換える
+inputs:
+  # 前処理を済ませた行 (8 行 × 特徴の 16 列 + 最後の処置の 1 列)
+  x: {shape: [8, 17], ui: {x: 0, y: 100}}
+nodes:
+  # 結果の予測 (17 → 隠れ層の幅の 32 → 1)
+  outcome1:
+    unit: nn.Linear
+    params: {in_features: 17, out_features: 32}
+    inputs: x
+    ui: {x: 220, y: 80}
+  outcome_act:
+    unit: nn.ReLU
+    inputs: outcome1
+    ui: {x: 470, y: 80}
+  outcome2:
+    unit: nn.Linear
+    params: {in_features: 32, out_features: 1}
+    inputs: outcome_act
+    ui: {x: 720, y: 80}
+# 結果の予測 (損失と効果の計算に使う)
+outputs:
+  outcome: outcome2
+ui:
+  outputs:
+    outcome: {x: 970, y: 100}

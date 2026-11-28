@@ -79,8 +79,8 @@ def test_example_names() -> None:
 ROLE_TEMPLATES = [
     "vae", "gan_generator", "gan_discriminator", "diffusion_denoiser",
     "contrastive_encoder", "two_tower_retrieval", "policy_value",
-    "tabular_autoencoder", "tabular_uplift", "tabular_price",
-    "tabular_demand"
+    "tabular_autoencoder", "tabular_uplift", "tabular_uplift_s",
+    "tabular_price", "tabular_demand"
 ]
 
 # 雛形の出力の名前ごとの形 (入力の例のバッチは 8)
@@ -97,6 +97,7 @@ ROLE_SHAPES = {
     "policy_value": {"logits": [8, 4], "value": [8, 1]},
     "tabular_autoencoder": {"recon": [8, 16]},
     "tabular_uplift": {"treated": [8, 1], "control": [8, 1]},
+    "tabular_uplift_s": {"outcome": [8, 1]},
     "tabular_price": {"units": [8, 1]},
     "tabular_demand": {"quantiles": [8, 9]}
 }
@@ -550,6 +551,62 @@ def test_tabular_uplift_example() -> None:
     loss.backward()
     assert model.nodes["treated1"].weight.grad is not None
     assert model.nodes["control1"].weight.grad is not None
+
+
+def test_tabular_uplift_s_example() -> None:
+    """
+    処置を入力に入れる表の行の効果の例が, 確認と形の推定と組み立てを通り,
+    結果の予測を (バッチ, 1) で出し, 処置の列を 1 と 0 にした予測の差で
+    負にもなりうる効果を数えられることを確かめる関数
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    ----------
+    None
+    """
+    from ml_modelcontrol import build_model
+
+    # 確認と形の推定 (特徴の 16 列 + 処置の 1 列)
+    spec = load_example("tabular_uplift_s")
+    assert validate(spec) == []
+    result = infer(spec)
+    assert spec["inputs"]["x"]["shape"] == [8, 17]
+    assert result["outputs"]["outcome"]["shape"] == [8, 1]
+
+    # 例と違う行の数での結果の予測 (負にならない縛りの無いロジット)
+    model = build_model(spec, seed=0).eval()
+    features = torch.randn(6, 16)
+    treatment = torch.tensor([1.0, 0.0, 1.0, 0.0, 1.0, 0.0])
+    rows = torch.cat([features, treatment.unsqueeze(1)], dim=1)
+    with torch.no_grad():
+        outcome = model(rows)
+    assert outcome.shape == (6, 1)
+
+    # 処置の列を 1 と 0 にした 2 つの予測の差 (0 と 1 の結果は確率の差)
+    treated_rows = rows.clone()
+    treated_rows[:, -1] = 1.0
+    control_rows = rows.clone()
+    control_rows[:, -1] = 0.0
+    with torch.no_grad():
+        effect = (
+            torch.sigmoid(model(treated_rows))
+            - torch.sigmoid(model(control_rows))
+        ).squeeze(1)
+    assert effect.shape == (6,)
+    assert bool((effect.abs() <= 1).all())
+
+    # 額の結果の負の正解への二乗誤差での学習 (処置の列まで届く勾配)
+    model.train()
+    targets = torch.tensor([-2.0, 1.0, -0.5, 3.0, 0.0, -1.0])
+    loss = nn.MSELoss()(model(rows).squeeze(1), targets)
+    loss.backward()
+    grad = model.nodes["outcome1"].weight.grad
+    assert grad is not None
+    assert bool((grad[:, -1] != 0).any())
+
 
 
 def test_tabular_price_example() -> None:
