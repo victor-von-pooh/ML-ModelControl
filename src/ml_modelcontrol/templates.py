@@ -52,6 +52,10 @@ TEMPLATE_ARGS: dict[str, dict[str, list[tuple[str, str, Any, int]]]] = {
                      ("param", "treated1", "in_features", 1),
                      ("param", "control1", "in_features", 1)],
     },
+    "tabular_uplift_s": {
+        "features": [("input", "x", 1, 1),
+                     ("param", "outcome1", "in_features", 1)],
+    },
     "tabular_price": {
         "features": [("input", "x", 1, 1),
                      ("param", "units1", "in_features", 1)],
