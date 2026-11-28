@@ -478,7 +478,7 @@ def state_code(spec: dict, analysis: Any) -> list[str]:
             )
             warnings.warn(
                 f"ノード {name} の外部の重み (weights) は書き出すコードでは"
-                "読みません. ML-ModelControl の build_model で組み立てた"
+                "読みません. build_model で組み立てた"
                 "モデルの state_dict を保存し, 書き出したクラスの "
                 "load_state_dict で読み込んでください",
                 stacklevel=4
