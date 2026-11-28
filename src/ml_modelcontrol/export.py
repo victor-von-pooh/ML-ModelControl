@@ -164,8 +164,8 @@ def export_python(
 
     # モデルの名前は文字の値として書き, コードとして解釈されないようにする
     title = (
-        f"{spec.get('name', class_name)} のモデル (ML-ModelControl の定義から"
-        "書き出したコード)"
+        f"{spec.get('name', class_name)} のモデル (モデルの定義から書き出した"
+        "コード)"
     )
     # 単独で動くコードでは, このライブラリの部品のクラスを書き写し
     copied: list[str] = []

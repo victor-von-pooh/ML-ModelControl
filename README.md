@@ -8,7 +8,7 @@ PyTorch (と互換のライブラリ) で作れるモデルの部品を登録簿
 
 - `nn.Linear` のような層, 足し算や連結のような演算, PyTorch Geometric のグラフニューラルネットワークの層, Hugging Face の学習済みのモデルを, 同じ形の部品として扱う
 - 分岐と合流のあるモデル (残差のつなぎ方, 複数の入力と出力) を定義できる
-- 定義の確認 (部品の名前, 引数, つなぎ方) と, 各部品の出力の形とパラメータ数の推定を, 部品ごとの結果で返す
+- 定義の確かめ (部品の名前, 引数, つなぎ方) と, 各部品の出力の形とパラメータ数の推定を, 部品ごとの結果で返す
 - 学習済みのモデルを部品にして一部だけを学ぶ形 (凍結, 零初期化, 外部の重み, 共有) を定義に書ける
 - 自作の部品を登録して定義に書ける. 保存した定義を別の定義の部品 (部分モデル) として使える
 - 全結合, CNN, LSTM, Transformer, BERT, GCN, U-Net, 点群, VAE, GAN, 拡散, 方策, 表の行の自己符号化器などの例の定義を同梱する (`list_examples`, `load_example`)
@@ -18,7 +18,7 @@ PyTorch (と互換のライブラリ) で作れるモデルの部品を登録簿
 
 | 相手 | 使うもの |
 | --- | --- |
-| ML-CreateArchitecture (モデルの作成) | 部品の一覧 (`describe_units`), 定義の確認と形の推定 (`validate`, `infer`), 定義の読み書き, 同梱の例, 学習済みの重みのライセンスの警告 |
+| ML-CreateArchitecture (モデルの作成・選定) | 部品の一覧 (`describe_units`), 定義の確かめと形の推定 (`validate`, `infer`), 定義の読み書き, 同梱の例, 学習済みの重みのライセンスの警告 |
 | ML-Found の学習のスクリプト (ML-Quest の骨組みを含む) | 定義から `build_model` でモデルを組み立てる. ML-Found は定義を実験の出力先に写す |
 | ML-Inference, ML-Provide | 実験に写した定義から推論のモデルを組み立てる. 自作の部品は `register_units_from` で読む. 学習済みの重みは `pretrained_info` で, 一式に写せるか (ライセンス) と重みの版を読む |
 
@@ -34,7 +34,7 @@ pip install -e ".[dev]"          # テスト (pytest) も動かす場合
 pip install -e ".[dev,all]"      # 外部のライブラリの部品も全て使う場合 (ライブラリごとに [geometric], [timm] なども選べる)
 ```
 
-- PyPI には公開していないので, clone したディレクトリで入れる. 別の環境 (学習のプロジェクトの仮想環境など) に入れる場合は, `pip install -e <clone したディレクトリ>` か `pip install "ml-modelcontrol @ git+https://github.com/victor-von-pooh/ML-ModelControl.git"` (任意の依存は `ml-modelcontrol[geometric] @ git+...`)
+- PyPI には公開していないので, clone したディレクトリで入れる. 別の環境 (学習のプロジェクトの仮想環境など) に入れる場合は, `pip install -e <clone したディレクトリ>` か `pip install "ml-modelcontrol @ git+https://github.com/victor-von-pooh/ML-ModelControl.git"` (追加の依存は `ml-modelcontrol[geometric] @ git+...`)
 - PyTorch は, 先に [PyTorch の手順](https://pytorch.org/get-started/locally/) で環境 (CPU, CUDA) に合わせて入れておくと, 大きな版を入れ直さずに済む
 - Python 3.10 から 3.13 で確かめている. PyTorch Geometric は Python 3.15 では読み込めない (ライブラリの側の問題) ので, グラフの部品を使う場合は 3.13 までを使う
 
@@ -91,7 +91,7 @@ code = export_python("model.yaml")       # 同じ計算をする Python のコ�
 
 外部のライブラリの部品は, そのライブラリを入れると使える (無い場合は一覧に「使えない」と理由と入れ方が出る).
 
-| 任意の依存 | 部品 |
+| 追加の依存 | 部品 |
 | --- | --- |
 | `geometric` | PyTorch Geometric のグラフの層 (`pyg.GCNConv`, `pyg.MeanAggregation` など) |
 | `huggingface` | Hugging Face のモデル (`hf.AutoModel`, `hf.AutoModelForSequenceClassification`, `hf.AutoModelForImageClassification`, 画像の本体の `hf.AutoVisionModel` など) |
@@ -131,7 +131,7 @@ from ml_modelcontrol import describe_spec_units, dump_spec, embed_subgraph
 spec = embed_subgraph("model.yaml", "block", "block.yaml")  # 写した定義 (辞書)
 spec["nodes"]["b1"] = {"unit": "sub.block", "inputs": "add"}
 spec["nodes"]["head"]["inputs"] = "b1"  # add と head の間に部分モデルを挟む
-units = describe_spec_units(spec)        # 部分モデルの部品の一覧 (describe_units() に加えて使う)
+units = describe_spec_units(spec)        # 部分モデルの部品の一覧 (describe_units() に足して使う)
 dump_spec(spec, "model_with_block.yaml")  # 写した定義を別の名前で保存
 ```
 
@@ -162,22 +162,22 @@ nodes:
 
 自作の部品は `register_unit(MyBlock, name="my.Block")` で登録すると, 定義の `unit` に書ける (`forward` が複数の値を返す場合は `outputs=["a", "b"]` で口の名前を付ける. 属性や辞書のキーで値を返す場合は `outputs={"logits": ["logits"], "last": ["hidden_states", -1]}` のように口ごとの取り出し方を書く. 引数の説明と範囲は `notes={"hidden": {"description": "中間の大きさ", "minimum": 1}}` のように付けられる. 名前の頭に組み込みの部品の頭 (`nn.`, `op.`, `sub.` など) は使えない).
 
-画面 (ML-CreateArchitecture) や推論のアプリで自作の部品を使う場合は, 部品をモジュールに宣言し, そのモジュールの名前をアプリの起動の設定に書く. アプリは起動のときに `register_units_from(["my_lab.units"])` で読み込み, `{"my_lab.units": ["my.Block", ...]}` のようにモジュールごとの部品の名前を返す. モジュールは `UNITS = [MyBlock, {"cls": MyPair, "name": "my.Pair", "outputs": ["a", "b"]}]` (クラスか `register_unit` の引数の辞書) か, `def register_units(register): register(MyBlock, name="my.Block")` の関数で部品を宣言する. 部品の一覧 (`describe_units`) の `module` に宣言したモジュールの名前が入る. 書いたモジュールは読み込んだときに任意のコードとして動くので, 信頼できるものだけを書く. モデルの定義に書かれた登録されていない名前からは何も読み込まず, 確認で「この部品 (...) は登録されていません. 自作の部品なら起動の設定に足してください」の誤りになる. 詳しくは docs/DESIGN.md の「自作の部品のモジュール」.
+画面 (ML-CreateArchitecture) や推論のアプリで自作の部品を使う場合は, 部品をモジュールに宣言し, そのモジュールの名前をアプリの起動の設定に書く. アプリは起動のときに `register_units_from(["my_lab.units"])` で読み込み, `{"my_lab.units": ["my.Block", ...]}` のようにモジュールごとの部品の名前を返す. モジュールは `UNITS = [MyBlock, {"cls": MyPair, "name": "my.Pair", "outputs": ["a", "b"]}]` (クラスか `register_unit` の引数の辞書) か, `def register_units(register): register(MyBlock, name="my.Block")` の関数で部品を宣言する. 部品の一覧 (`describe_units`) の `module` に宣言したモジュールの名前が入る. 書いたモジュールは読み込んだときに任意のコードとして動くので, 信頼できるものだけを書く. モデルの定義に書かれた登録されていない名前からは何も読み込まず, 確かめで「この部品 (...) は登録されていません. 自作の部品なら起動の設定に足してください」の誤りになる. 詳しくは docs/DESIGN.md の「自作の部品のモジュール」.
 
 ### ML-Found で学習する
 
-組み立てたモデルは普通の `nn.Module` なので, PyTorch の学習の基盤 [ML-Found](https://github.com/victor-von-pooh/ML-Found) の `Trainer` にそのまま渡せる. 定義のファイルの置き場をプロジェクトの config の `model.spec` に書き, 学習スクリプトで組み立てる. ML-Found は学習を始めるときに `model.spec` の定義を実験の出力先に `model_spec.yaml` として写し, 場所と中身の sha256 を `source.yaml` の `model_spec` に残す (ML-Found の docs/FORMAT.md). 後から同じモデルを作って重みを読み込める.
+組み立てたモデルは普通の `nn.Module` なので, PyTorch の学習の基盤 [ML-Found](https://github.com/victor-von-pooh/ML-Found) の `Trainer` にそのまま渡せる. 定義のファイルの置き場を学習のプロジェクトの config の `model.spec` に書き, 学習スクリプトで組み立てる. ML-Found は学習を始めるときに `model.spec` の定義を実験の出力先に `model_spec.yaml` として写し, 場所と中身の sha256 を `source.yaml` の `model_spec` に残す (ML-Found の docs/FORMAT.md). 後から同じモデルを作って重みを読み込める.
 
-ML-Found のプロジェクト (`configs/default/train.yaml`, `configs/experiment/train.yaml`, 学習スクリプトを持つディレクトリ) の作り方は, ML-Found の README の「使い方」にある. ここでは, その学習スクリプトでモデルの定義を使う部分を示す.
+ML-Found の学習のプロジェクト (`configs/default/train.yaml`, `configs/experiment/train.yaml`, 学習スクリプトを持つディレクトリ) の作り方は, ML-Found の README の「使い方」にある. ここでは, その学習スクリプトでモデルの定義を使う部分を示す.
 
-1. プロジェクトの仮想環境に, ML-Found とこのライブラリを入れる
+1. 学習のプロジェクトの仮想環境に, ML-Found とこのライブラリを入れる
 
     ```bash
     pip install "ml-found @ git+https://github.com/victor-von-pooh/ML-Found.git"
     pip install "ml-modelcontrol @ git+https://github.com/victor-von-pooh/ML-ModelControl.git"
     ```
 
-2. モデルの定義をプロジェクトの中 (下の例では `models/`) に置く. 例から始める場合は次のように保存する
+2. モデルの定義を学習のプロジェクトの中 (下の例では `models/`) に置く. 例から始める場合は次のように保存する
 
     ```python
     from ml_modelcontrol import dump_spec, load_example
@@ -185,7 +185,7 @@ ML-Found のプロジェクト (`configs/default/train.yaml`, `configs/experimen
     dump_spec(load_example("mlp"), "models/mlp.yaml")  # 16 次元の入力から 3 クラス
     ```
 
-3. 定義の置き場を, プロジェクトの default の config の `model.spec` に書く (ML-Found はこの項目の定義を実験の出力先に写す)
+3. 定義の置き場を, 学習のプロジェクトの default の config の `model.spec` に書く (ML-Found はこの項目の定義を実験の出力先に写す)
 
     ```yaml
     # configs/default/train.yaml
@@ -193,13 +193,13 @@ ML-Found のプロジェクト (`configs/default/train.yaml`, `configs/experimen
       name: mlp
       seed: 0
     model:
-      spec: models/mlp.yaml    # プロジェクトのディレクトリからの相対パス
+      spec: models/mlp.yaml    # 学習のプロジェクトのディレクトリからの相対パス
     ```
 
 4. 学習スクリプトで定義から組み立てて学習する
 
     ```python
-    # train.py (プロジェクトのディレクトリに置く)
+    # train.py (学習のプロジェクトのディレクトリに置く)
     from pathlib import Path
 
     import torch
@@ -242,7 +242,7 @@ ML-Found のプロジェクト (`configs/default/train.yaml`, `configs/experimen
     # 実験を始める (ML-Found が定義を出力先の model_spec.yaml に写す)
     experiment = start_experiment(cfg, diff, str(PROJECT_DIR))
 
-    # データ (ここでは乱数. 実際はプロジェクトのデータ)
+    # データ (ここでは乱数. 実際は学習のプロジェクトのデータ)
     x = torch.randn(256, 16)
     y = torch.randint(0, 3, (256,))
     train_loader = DataLoader(TensorDataset(x[:192], y[:192]), batch_size=32)
@@ -252,10 +252,10 @@ ML-Found のプロジェクト (`configs/default/train.yaml`, `configs/experimen
     history = trainer.fit(train_loader, valid_loader)
     ```
 
-`experiment.run_dir` は実験の出力先 (`Path`. プロジェクトのディレクトリの `outputs/<experiment.name>/<日付>/<時刻>/`). ML-Found は学習した重みを `state_dict` として `final_model.pt` に保存するので, 後から読み込む場合は, `source.yaml` の `model_spec` の `status` が `copied` であることを確かめ, 写した定義で組み立ててから重みを読み込む. 写せなかった場合 (プロジェクトの外を指す, リンクなど) は `source.yaml` の `model_spec` の `status` が `copied` でなく, `model_spec.yaml` は無い.
+`experiment.run_dir` は実験の出力先 (`Path`. 学習のプロジェクトのディレクトリの `outputs/<experiment.name>/<日付>/<時刻>/`). ML-Found は学習した重みを `state_dict` として `final_model.pt` に保存するので, 後から読み込む場合は, `source.yaml` の `model_spec` の `status` が `copied` であることを確かめ, 写した定義で組み立ててから重みを読み込む. 写せなかった場合 (学習のプロジェクトの外を指す, リンクなど) は `source.yaml` の `model_spec` の `status` が `copied` でなく, `model_spec.yaml` は無い.
 
 ```python
-# 後から読み込む (パスはプロジェクトのディレクトリから. 日時は実験ごとに違う)
+# 後から読み込む (パスは学習のプロジェクトのディレクトリから. 日時は実験ごとに違う)
 import torch
 from ml_modelcontrol import build_model
 
@@ -267,12 +267,12 @@ model.load_state_dict(torch.load(f"{run_dir}/final_model.pt"))
 - 出力が 1 つの定義のモデルはテンソルを返し, 複数の場合は出力の名前の辞書を返す. `step` では `logits = model(x)` か, 複数なら `logits = model(x)["logits"]` のように受け取る
 - 入力は定義の `inputs` の順の位置か, 名前のキーワードで渡す
 - 学習済みの重みを読む部品 (`pretrained: true` など) は, `build_model` のときに重みを取得する (後から読み込むときも, 取得してから `final_model.pt` の重みで上書きする. ネットワークと時間が要る)
-- 学習スクリプトは, 実行した時点のプロジェクトの定義のファイルから組み立てる. 前の実験と同じモデルで学習し直したい場合は, その実験の `model_spec.yaml` をプロジェクトの定義のファイルに写してから起動する
+- 学習スクリプトは, 実行した時点の学習のプロジェクトの定義のファイルから組み立てる. 前の実験と同じモデルで学習し直したい場合は, その実験の `model_spec.yaml` を学習のプロジェクトの定義のファイルに写してから起動する
 
 GUI のアプリと合わせて使う場合 (どちらも任意).
 
-- ML-CreateArchitecture (このライブラリの部品を画面で組み立てるアプリ) で保存した定義は, アプリの保存先 (ML-CreateArchitecture の README) から, または画面の「YAML」のダウンロードで, プロジェクトの中に写して使う. 定義を直した場合は写し直す
-- [ML-Dashboard](https://github.com/victor-von-pooh/ML-Dashboard) (ML-Found の実験を見て, 学習を起動するアプリ) から起動する場合は, プロジェクトの仮想環境にこのライブラリも入れておく. 「この設定でもう一度起動」で起動し直す場合も, 上と同じく実行した時点のプロジェクトの定義のファイルから組み立てる
+- ML-CreateArchitecture (このライブラリの部品を画面で組み立てるアプリ) で保存した定義は, アプリの保存先 (ML-CreateArchitecture の README) から, または画面の「YAML」のダウンロードで, 学習のプロジェクトの中に写して使う. 定義を直した場合は写し直す
+- [ML-Dashboard](https://github.com/victor-von-pooh/ML-Dashboard) (ML-Found の実験を見て, 学習を起動するアプリ) から起動する場合は, 学習のプロジェクトの仮想環境にこのライブラリも入れておく. 「この設定でもう一度起動」で起動し直す場合も, 上と同じく実行した時点の学習のプロジェクトの定義のファイルから組み立てる
 
 ## 文書
 
