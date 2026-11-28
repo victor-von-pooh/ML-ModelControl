@@ -556,8 +556,9 @@ def test_tabular_uplift_example() -> None:
 def test_tabular_uplift_s_example() -> None:
     """
     処置を入力に入れる表の行の効果の例が, 確認と形の推定と組み立てを通り,
-    結果の予測を (バッチ, 1) で出し, 処置の列を 1 と 0 にした予測の差で
-    負にもなりうる効果を数えられることを確かめる関数
+    結果の予測を負にならない縛り無しに (バッチ, 1) で出し, 処置の列を 1 と
+    0 にした予測の差で効果を数えられ, 処置の列まで勾配が届くことを確かめる
+    関数
 
     Parameters
     ----------
@@ -607,6 +608,12 @@ def test_tabular_uplift_s_example() -> None:
     assert grad is not None
     assert bool((grad[:, -1] != 0).any())
 
+    # 負にならない縛りの無い出力 (最後の層の偏りだけを負にした予測)
+    with torch.no_grad():
+        model.nodes["outcome2"].weight.zero_()
+        model.nodes["outcome2"].bias.fill_(-5.0)
+        outcome = model(rows)
+    assert torch.allclose(outcome, torch.full((6, 1), -5.0))
 
 
 def test_tabular_price_example() -> None:
