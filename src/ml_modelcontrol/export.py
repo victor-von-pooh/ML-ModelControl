@@ -164,8 +164,8 @@ def export_python(
 
     # モデルの名前は文字の値として書き, コードとして解釈されないようにする
     title = (
-        f"{spec.get('name', class_name)} のモデル (ML-ModelControl の定義から"
-        "書き出したコード)"
+        f"{spec.get('name', class_name)} のモデル (モデルの定義から書き出した"
+        "コード)"
     )
     # 単独で動くコードでは, このライブラリの部品のクラスを書き写し
     copied: list[str] = []
@@ -478,7 +478,7 @@ def state_code(spec: dict, analysis: Any) -> list[str]:
             )
             warnings.warn(
                 f"ノード {name} の外部の重み (weights) は書き出すコードでは"
-                "読みません. ML-ModelControl の build_model で組み立てた"
+                "読みません. build_model で組み立てた"
                 "モデルの state_dict を保存し, 書き出したクラスの "
                 "load_state_dict で読み込んでください",
                 stacklevel=4

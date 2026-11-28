@@ -307,7 +307,7 @@ def infer(
     入力の例をモデルに通し, ノードごとの出力の形とパラメータ数を求める関数
 
     cpu で eval() と勾配なしで, ノードを 1 つずつ計算する. 失敗したノードは
-    エラーを, その先のノードは計算できないことを返す
+    誤りの文を, その先のノードは計算できないことを返す
 
     Parameters
     ----------
@@ -610,7 +610,7 @@ def run_nodes(
             if upstream:
                 entry["status"] = "skipped"
                 entry["error"] = (
-                    f"前のノード {upstream[0]} の誤りで計算できません"
+                    f"前のノード {upstream[0]} の失敗で計算できません"
                 )
                 failed[name] = entry["error"]
                 continue
